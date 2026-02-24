@@ -1,0 +1,1619 @@
+// lib/src/features/listings/add_listing_screen.dart
+import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
+
+import 'package:chestore2/src/constants/categories.dart';
+import 'package:chestore2/src/data/auto_catalog.dart';
+import 'package:chestore2/src/data/electronics_catalog.dart';
+import 'package:chestore2/src/data/russia_locations.dart';
+import 'package:chestore2/src/features/listings/pick_location_screen.dart';
+import 'package:chestore2/src/models/car_specs.dart';
+import 'package:chestore2/src/services/auth_service.dart';
+import 'package:chestore2/src/services/listings_service.dart';
+import 'package:flutter/material.dart';
+import 'package:geocoding/geocoding.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:latlong2/latlong.dart' as latlng;
+import 'package:provider/provider.dart';
+
+class AddListingScreen extends StatefulWidget {
+  const AddListingScreen({super.key});
+
+  @override
+  State<AddListingScreen> createState() => _AddListingScreenState();
+}
+
+class _AddListingScreenState extends State<AddListingScreen> {
+  final _title = TextEditingController();
+  final _city = TextEditingController();
+  final _desc = TextEditingController();
+  final _price = TextEditingController();
+  final _phone = TextEditingController();
+
+  // ✅ авто-поля
+  final _carYear = TextEditingController();
+  final _carMileage = TextEditingController();
+  final _carEngine = TextEditingController(); // литры
+  final _carPower = TextEditingController(); // л.с.
+  final _carOwners = TextEditingController();
+  final _carVin = TextEditingController();
+  final _carNote = TextEditingController();
+
+  String _category = 'Авто';
+  String _subcategory = 'Легковые автомобили'; // ✅ ДОБАВИЛИ подкатегорию
+  final _photos = <File>[];
+  bool _saving = false;
+
+  final _picker = ImagePicker();
+  latlng.LatLng? _pickedLatLng;
+
+  bool _phoneHidden = true;
+
+  // ===== “умные” поля =====
+  String? _autoBrand;
+  String? _autoModel;
+  String? _autoGen;
+
+  String? _electronicsSub;
+
+  // ✅ НОВОЕ: Недвижимость
+  String _dealType = 'Продажа';
+  String _realEstateType = 'Квартира';
+
+  // ✅ НОВОЕ: Одежда
+  String _clothesType = 'Верхняя одежда';
+
+  // ✅ доп. селекты для авто
+  String _carBody = 'Седан';
+  String _carFuel = 'Бензин';
+  String _carTransmission = 'Автомат';
+  String _carDrive = 'Передний';
+  String _carCondition = 'Хорошее';
+  String _carColor = 'Чёрный';
+  bool? _carCleared; // растаможен (null = не указано)
+
+  final Map<String, String> _deliveryNames = const {
+    'cdek': 'СДЭК',
+    'ozon': 'Ozon',
+    'pek': 'ПЭК',
+    'boxberry': 'Boxberry',
+    'dpd': 'DPD',
+    'delovie': 'Деловые линии',
+    'energia': 'Энергия',
+    'kit': 'КИТ',
+    'pochta': 'Почта России',
+    'pickup': 'Самовывоз',
+  };
+
+  late final Map<String, bool> _delivery = {
+    for (final k in _deliveryNames.keys) k: false,
+  };
+
+  bool get _isAuto => _category == 'Авто';
+  bool get _isElectronics => _category == 'Электроника';
+  bool get _isRealEstate => _category == 'Недвижимость';
+  bool get _isClothes => _category == 'Одежда';
+
+  // ✅ справочники авто
+  static const _bodyTypes = <String>[
+    'Седан',
+    'Хэтчбек',
+    'Универсал',
+    'Кроссовер',
+    'Внедорожник',
+    'Купе',
+    'Кабриолет',
+    'Минивэн',
+    'Пикап',
+    'Фургон',
+    'Лифтбек',
+    'Другое',
+  ];
+
+  static const _fuelTypes = <String>[
+    'Бензин',
+    'Дизель',
+    'Гибрид',
+    'Электро',
+    'Газ',
+    'Другое',
+  ];
+
+  static const _transmissions = <String>[
+    'Механика',
+    'Автомат',
+    'Вариатор',
+    'Робот',
+    'Другое',
+  ];
+
+  static const _drives = <String>['Передний', 'Задний', 'Полный'];
+
+  static const _conditions = <String>[
+    'Отличное',
+    'Хорошее',
+    'Среднее',
+    'Требует ремонта',
+  ];
+
+  static const _colors = <String>[
+    'Чёрный',
+    'Белый',
+    'Серый',
+    'Серебристый',
+    'Синий',
+    'Красный',
+    'Зелёный',
+    'Жёлтый',
+    'Коричневый',
+    'Бежевый',
+    'Оранжевый',
+    'Фиолетовый',
+    'Другой',
+  ];
+
+  // ✅ НОВОЕ: недвижимость / одежда
+  static const _dealTypes = <String>['Продажа', 'Аренда'];
+
+  static const _realEstateTypes = <String>[
+    'Квартира',
+    'Дом',
+    'Участок',
+    'Дача',
+    'Комната',
+    'Гараж',
+    'Коммерческая',
+  ];
+
+  static const _clothesTypes = <String>[
+    'Верхняя одежда',
+    'Футболки / рубашки',
+    'Толстовки / свитшоты',
+    'Брюки / джинсы',
+    'Платья / юбки',
+    'Обувь',
+    'Детская одежда',
+    'Аксессуары',
+    'Другое',
+  ];
+
+  @override
+  void dispose() {
+    _title.dispose();
+    _city.dispose();
+    _desc.dispose();
+    _price.dispose();
+    _phone.dispose();
+
+    _carYear.dispose();
+    _carMileage.dispose();
+    _carEngine.dispose();
+    _carPower.dispose();
+    _carOwners.dispose();
+    _carVin.dispose();
+    _carNote.dispose();
+
+    super.dispose();
+  }
+
+  // ================== ФОТО ==================
+  void _openPhotoMenu() {
+    if (_photos.length >= 6) return;
+
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('Выбрать несколько из галереи'),
+              onTap: () async {
+                Navigator.pop(ctx);
+                await _pickPhotosFromGalleryMulti();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_camera_outlined),
+              title: const Text('Снять на камеру'),
+              onTap: () async {
+                Navigator.pop(ctx);
+                await _pickPhoto(ImageSource.camera);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickPhotosFromGalleryMulti() async {
+    final remain = 6 - _photos.length;
+    if (remain <= 0) return;
+
+    final xs = await _picker.pickMultiImage(imageQuality: 80);
+    if (xs.isEmpty) return;
+
+    setState(() {
+      for (final x in xs.take(remain)) {
+        _photos.add(File(x.path));
+      }
+    });
+
+    if (xs.length > remain && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Можно максимум 6 фото. Добавлено: $remain')),
+      );
+    }
+  }
+
+  Future<void> _pickPhoto(ImageSource source) async {
+    final x = await _picker.pickImage(source: source, imageQuality: 80);
+    if (x == null) return;
+    if (_photos.length >= 6) return;
+    setState(() => _photos.add(File(x.path)));
+  }
+
+  // ================== КАРТА -> АДРЕС ==================
+  Future<void> _fillCityFromLatLng(latlng.LatLng p) async {
+    try {
+      final placemarks = await placemarkFromCoordinates(
+        p.latitude,
+        p.longitude,
+      );
+      if (placemarks.isEmpty) return;
+      final pm = placemarks.first;
+
+      final parts = <String>[
+        if ((pm.administrativeArea ?? '').trim().isNotEmpty)
+          pm.administrativeArea!,
+        if ((pm.subAdministrativeArea ?? '').trim().isNotEmpty)
+          pm.subAdministrativeArea!,
+        if ((pm.locality ?? '').trim().isNotEmpty) pm.locality!,
+        if ((pm.subLocality ?? '').trim().isNotEmpty) pm.subLocality!,
+      ];
+
+      final text = parts.join(', ').trim();
+      if (text.isNotEmpty) _city.text = text;
+    } catch (_) {}
+  }
+
+  Future<void> _openMap() async {
+    final res = await Navigator.of(context).push<latlng.LatLng>(
+      MaterialPageRoute(builder: (_) => const PickLocationScreen()),
+    );
+    if (res == null) return;
+    setState(() => _pickedLatLng = res);
+
+    await _fillCityFromLatLng(res);
+
+    if (mounted) setState(() {});
+  }
+
+  // ================== ДОСТАВКА ==================
+  String _deliverySummary() {
+    final selected = _delivery.entries
+        .where((e) => e.value == true)
+        .map((e) => _deliveryNames[e.key] ?? e.key)
+        .toList();
+
+    if (selected.isEmpty) return 'Не выбрано';
+    return selected.join(', ');
+  }
+
+  Future<void> _openDeliveryPicker() async {
+    final tmp = Map<String, bool>.from(_delivery);
+
+    await showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: StatefulBuilder(
+          builder: (ctx, setModal) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(16, 8, 16, 8),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Выберите доставку',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ),
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: _deliveryNames.entries.map((e) {
+                    final key = e.key;
+                    return CheckboxListTile(
+                      value: tmp[key] ?? false,
+                      onChanged: (v) => setModal(() => tmp[key] = v ?? false),
+                      title: Text(e.value),
+                      controlAffinity: ListTileControlAffinity.leading,
+                    );
+                  }).toList(),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: FilledButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Готово'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    setState(() {
+      _delivery
+        ..clear()
+        ..addAll(tmp);
+    });
+  }
+
+  // ================== УМНЫЕ ПОЛЯ ==================
+  void _resetSmartFields() {
+    _autoBrand = null;
+    _autoModel = null;
+    _autoGen = null;
+    _electronicsSub = null;
+    _title.clear();
+
+    // ✅ сброс авто параметров
+    _carYear.clear();
+    _carMileage.clear();
+    _carEngine.clear();
+    _carPower.clear();
+    _carOwners.clear();
+    _carVin.clear();
+    _carNote.clear();
+
+    _carBody = 'Седан';
+    _carFuel = 'Бензин';
+    _carTransmission = 'Автомат';
+    _carDrive = 'Передний';
+    _carCondition = 'Хорошее';
+    _carColor = 'Чёрный';
+    _carCleared = null;
+
+    // ✅ сброс недвижимость/одежда
+    _dealType = 'Продажа';
+    _realEstateType = 'Квартира';
+    _clothesType = 'Верхняя одежда';
+  }
+
+  void _rebuildTitleFromSelections() {
+    if (_isAuto) {
+      final parts = <String>[
+        if ((_autoBrand ?? '').trim().isNotEmpty) _autoBrand!.trim(),
+        if ((_autoModel ?? '').trim().isNotEmpty) _autoModel!.trim(),
+        if ((_autoGen ?? '').trim().isNotEmpty) _autoGen!.trim(),
+      ];
+      _title.text = parts.join(' ').trim();
+      return;
+    }
+
+    if (_isElectronics) {
+      final base = (_electronicsSub ?? '').trim();
+      if (base.isNotEmpty && _title.text.trim().isEmpty) {
+        _title.text = base;
+      }
+      return;
+    }
+
+    // недвижимость/одежда — пусть пользователь сам пишет название
+  }
+
+  Future<String?> _askText({
+    required String title,
+    required String hint,
+  }) async {
+    final c = TextEditingController();
+    final res = await showDialog<String?>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: TextField(
+          controller: c,
+          decoration: InputDecoration(
+            hintText: hint,
+            border: const OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Отмена'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, c.text.trim()),
+            child: const Text('Ок'),
+          ),
+        ],
+      ),
+    );
+    final t = (res ?? '').trim();
+    if (t.isEmpty) return null;
+    return t;
+  }
+
+  // ✅ ОДНО ОКНО выбора города
+  Future<void> _openCityPickerOneWindow() async {
+    String q = '';
+    String? region;
+
+    final flat = <String>[
+      ...kRussiaPopularCities,
+      ...kRussiaRegions,
+      for (final e in kRussiaRegionCities.entries) ...[
+        ...e.value
+            .where((x) => x != 'Другая (вписать)')
+            .map((x) => '${e.key} • $x'),
+      ],
+      'Вписать вручную',
+    ];
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: StatefulBuilder(
+          builder: (ctx, setM) {
+            final query = q.trim().toLowerCase();
+            int mode = 0; // 0 общий, 1 регионы, 2 города региона
+
+            List<String> buildItems() {
+              if (mode == 1) {
+                return kRussiaRegions
+                    .where(
+                      (x) => query.isEmpty
+                          ? true
+                          : x.toLowerCase().contains(query),
+                    )
+                    .toList();
+              }
+              if (mode == 2) {
+                final list =
+                    (kRussiaRegionCities[region] ?? const ['Другая (вписать)'])
+                        .toList();
+                return list
+                    .where(
+                      (x) => query.isEmpty
+                          ? true
+                          : x.toLowerCase().contains(query),
+                    )
+                    .toList();
+              }
+              return flat
+                  .where(
+                    (x) =>
+                        query.isEmpty ? true : x.toLowerCase().contains(query),
+                  )
+                  .toList();
+            }
+
+            final items = buildItems();
+
+            Future<void> applyCity(String value) async {
+              if (value == 'Вписать вручную') {
+                final custom = await _askText(
+                  title: 'Введите город/село',
+                  hint: 'Например: Чеченская Республика, Шали / с. Алхан-Юрт',
+                );
+                if (custom == null) return;
+                setState(() => _city.text = custom);
+                if (mounted) setState(() {});
+                Navigator.pop(ctx);
+                return;
+              }
+
+              if (value.contains(' • ')) {
+                final parts = value.split(' • ');
+                final r = parts.first.trim();
+                final c = parts.length > 1 ? parts[1].trim() : '';
+                setState(() => _city.text = c.isEmpty ? r : '$r, $c');
+                if (mounted) setState(() {});
+                Navigator.pop(ctx);
+                return;
+              }
+
+              if (kRussiaRegions.contains(value)) {
+                setM(() {
+                  region = value;
+                  q = '';
+                  mode = 2;
+                });
+                return;
+              }
+
+              if (value == 'Другая (вписать)') {
+                final custom = await _askText(
+                  title: 'Введите город/село',
+                  hint: region == null
+                      ? 'Например: Грозный'
+                      : 'Например: ${region!}, с. ... / г. ...',
+                );
+                if (custom == null) return;
+
+                setState(
+                  () => _city.text = region == null
+                      ? custom
+                      : '${region!}, $custom',
+                );
+                if (mounted) setState(() {});
+                Navigator.pop(ctx);
+                return;
+              }
+
+              setState(() => _city.text = value);
+              if (mounted) setState(() {});
+              Navigator.pop(ctx);
+            }
+
+            return SizedBox(
+              height: MediaQuery.of(ctx).size.height * 0.82,
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            region == null
+                                ? 'Город / регион (в одном окне)'
+                                : 'Регион: $region',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w800),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          child: const Text('Закрыть'),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                    child: TextField(
+                      decoration: const InputDecoration(
+                        prefixIcon: Icon(Icons.search),
+                        hintText: 'Поиск (город, регион, село)',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      onChanged: (v) => setM(() => q = v),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: FilledButton.tonal(
+                            onPressed: () => setM(() {
+                              region = null;
+                              q = '';
+                              mode = 0;
+                            }),
+                            child: const Text('Общий поиск'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: FilledButton.tonal(
+                            onPressed: () => setM(() {
+                              region = null;
+                              q = '';
+                              mode = 1;
+                            }),
+                            child: const Text('Выбрать регион'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: FilledButton.tonal(
+                            onPressed: region == null
+                                ? null
+                                : () => setM(() {
+                                    q = '';
+                                    mode = 2;
+                                  }),
+                            child: const Text('Города'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  Expanded(
+                    child: ListView.separated(
+                      itemCount: items.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      itemBuilder: (_, i) {
+                        final v = items[i];
+                        return ListTile(
+                          title: Text(v),
+                          onTap: () => applyCity(v),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  // ✅ ОДНО ОКНО выбора авто (марка/модель/поколение)
+  Future<void> _openAutoPickerOneWindow() async {
+    String? brand = _autoBrand;
+    String? model = _autoModel;
+    String? gen = _autoGen;
+
+    int step = 0;
+    String q = '';
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: StatefulBuilder(
+          builder: (ctx, setM) {
+            List<String> currentItems() {
+              if (step == 0) return kAutoBrandsPopular;
+              if (step == 1)
+                return (brand == null)
+                    ? const []
+                    : (kAutoModels[brand!] ?? const []);
+              final key = '${brand ?? ''}|${model ?? ''}';
+              final gens = kAutoGenerations[key] ?? const [];
+              return gens.isEmpty
+                  ? const ['Не указывать']
+                  : ['Не указывать', ...gens];
+            }
+
+            final items = currentItems()
+                .where(
+                  (x) => q.trim().isEmpty
+                      ? true
+                      : x.toLowerCase().contains(q.trim().toLowerCase()),
+                )
+                .toList();
+
+            String title() => step == 0
+                ? 'Выбор марки'
+                : (step == 1 ? 'Выбор модели' : 'Поколение / серия');
+
+            Future<void> pickItem(String v) async {
+              if (step == 0) {
+                if (v == 'Другая марка') {
+                  final custom = await _askText(
+                    title: 'Другая марка',
+                    hint: 'Например: Porsche',
+                  );
+                  if (custom == null) return;
+                  v = custom;
+                }
+                setM(() {
+                  brand = v;
+                  model = null;
+                  gen = null;
+                  step = 1;
+                  q = '';
+                });
+                return;
+              }
+
+              if (step == 1) {
+                if (v == 'Другая модель') {
+                  final custom = await _askText(
+                    title: 'Другая модель',
+                    hint: 'Например: Camry',
+                  );
+                  if (custom == null) return;
+                  v = custom;
+                }
+                setM(() {
+                  model = v;
+                  gen = null;
+                  step = 2;
+                  q = '';
+                });
+                return;
+              }
+
+              setM(() => gen = (v == 'Не указывать') ? null : v);
+            }
+
+            return SizedBox(
+              height: MediaQuery.of(ctx).size.height * 0.86,
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            title(),
+                            style: const TextStyle(fontWeight: FontWeight.w800),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          child: const Text('Закрыть'),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                    child: TextField(
+                      decoration: const InputDecoration(
+                        prefixIcon: Icon(Icons.search),
+                        hintText: 'Поиск',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      onChanged: (v) => setM(() => q = v),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: FilledButton.tonal(
+                            onPressed: () => setM(() {
+                              step = 0;
+                              q = '';
+                            }),
+                            child: Text(brand == null ? 'Марка' : 'Марка ✓'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: FilledButton.tonal(
+                            onPressed: (brand == null)
+                                ? null
+                                : () => setM(() {
+                                    step = 1;
+                                    q = '';
+                                  }),
+                            child: Text(model == null ? 'Модель' : 'Модель ✓'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: FilledButton.tonal(
+                            onPressed: (brand == null || model == null)
+                                ? null
+                                : () => setM(() {
+                                    step = 2;
+                                    q = '';
+                                  }),
+                            child: const Text('Поколение'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  Expanded(
+                    child: ListView.separated(
+                      itemCount: items.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      itemBuilder: (_, i) {
+                        final v = items[i];
+                        return ListTile(
+                          title: Text(v),
+                          onTap: () => pickItem(v),
+                        );
+                      },
+                    ),
+                  ),
+                  SafeArea(
+                    top: false,
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: FilledButton(
+                        onPressed: () {
+                          if (brand == null || model == null) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Выберите марку и модель'),
+                              ),
+                            );
+                            return;
+                          }
+                          setState(() {
+                            _autoBrand = brand;
+                            _autoModel = model;
+                            _autoGen = gen;
+                          });
+                          _rebuildTitleFromSelections();
+                          Navigator.pop(ctx);
+                        },
+                        child: Text(
+                          (brand == null || model == null)
+                              ? 'Выбери марку и модель'
+                              : 'Применить: $brand $model ${gen ?? ''}'.trim(),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  // ✅ ОДНО ОКНО выбора электроники
+  Future<void> _openElectronicsPickerOneWindow() async {
+    String? sub = _electronicsSub;
+    String q = '';
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: StatefulBuilder(
+          builder: (ctx, setM) {
+            final items = kElectronicsSubcategories
+                .where(
+                  (x) => q.trim().isEmpty
+                      ? true
+                      : x.toLowerCase().contains(q.trim().toLowerCase()),
+                )
+                .toList();
+
+            return SizedBox(
+              height: MediaQuery.of(ctx).size.height * 0.75,
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
+                    child: Row(
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            'Выбор подкатегории (Электроника)',
+                            style: TextStyle(fontWeight: FontWeight.w800),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          child: const Text('Закрыть'),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                    child: TextField(
+                      decoration: const InputDecoration(
+                        prefixIcon: Icon(Icons.search),
+                        hintText: 'Поиск',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      onChanged: (v) => setM(() => q = v),
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  Expanded(
+                    child: ListView.separated(
+                      itemCount: items.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      itemBuilder: (_, i) {
+                        final v = items[i];
+                        final sel = v == sub;
+                        return ListTile(
+                          title: Text(v),
+                          trailing: sel ? const Icon(Icons.check) : null,
+                          onTap: () => setM(() => sub = v),
+                        );
+                      },
+                    ),
+                  ),
+                  SafeArea(
+                    top: false,
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: FilledButton(
+                        onPressed: () {
+                          if (sub == null) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Выберите подкатегорию'),
+                              ),
+                            );
+                            return;
+                          }
+                          setState(() => _electronicsSub = sub);
+                          _rebuildTitleFromSelections();
+                          Navigator.pop(ctx);
+                        },
+                        child: Text(
+                          sub == null
+                              ? 'Выбери подкатегорию'
+                              : 'Применить: $sub',
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  // ================== СОХРАНЕНИЕ ==================
+  bool _validInt(String s) => int.tryParse(s.trim()) != null;
+  bool _validDouble(String s) =>
+      double.tryParse(s.trim().replaceAll(',', '.')) != null;
+
+  Future<void> _save() async {
+    final title = _title.text.trim();
+    final city = _city.text.trim();
+    final desc = _desc.text.trim();
+    final phone = _phone.text.trim();
+    final price = int.tryParse(_price.text.trim()) ?? 0;
+
+    if (_isAuto && (_autoBrand == null || _autoModel == null)) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Выберите марку и модель')));
+      return;
+    }
+
+    if (title.isEmpty || desc.isEmpty || price <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Заполните название, описание и цену')),
+      );
+      return;
+    }
+
+    if (_photos.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Добавьте минимум 1 фото')));
+      return;
+    }
+
+    // ✅ обязательные авто поля
+    CarSpecs? car;
+    if (_isAuto) {
+      if (!_validInt(_carYear.text) ||
+          !_validInt(_carMileage.text) ||
+          !_validDouble(_carEngine.text) ||
+          !_validInt(_carPower.text)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Заполните авто: год, пробег, объём (л) и мощность (л.с.)',
+            ),
+          ),
+        );
+        return;
+      }
+
+      final year = int.parse(_carYear.text.trim());
+      final mileage = int.parse(_carMileage.text.trim());
+      final engine = double.parse(_carEngine.text.trim().replaceAll(',', '.'));
+      final power = int.parse(_carPower.text.trim());
+
+      final owners = _carOwners.text.trim().isEmpty
+          ? null
+          : int.tryParse(_carOwners.text.trim());
+      final vin = _carVin.text.trim().isEmpty ? null : _carVin.text.trim();
+      final note = _carNote.text.trim().isEmpty ? null : _carNote.text.trim();
+
+      car = CarSpecs(
+        brand: _autoBrand!.trim(),
+        model: _autoModel!.trim(),
+        generation: (_autoGen ?? '').trim(),
+        year: year,
+        mileageKm: mileage,
+        bodyType: _carBody,
+        fuel: _carFuel,
+        engineVolume: engine,
+        powerHp: power,
+        transmission: _carTransmission,
+        drive: _carDrive,
+        condition: _carCondition,
+        color: _carColor,
+        isCleared: _carCleared,
+        owners: owners,
+        vin: vin,
+        note: note,
+      );
+    }
+
+    // ✅ новые поля
+    final dealType = _isRealEstate ? _dealType : null;
+    final realEstateType = _isRealEstate ? _realEstateType : null;
+    final clothesType = _isClothes ? _clothesType : null;
+
+    final auth = context.read<AuthService>();
+    final svc = context.read<ListingsService>();
+
+    final ownerName =
+        (auth.currentUser!.displayName?.trim().isNotEmpty ?? false)
+        ? auth.currentUser!.displayName!.trim()
+        : (auth.currentUser!.email ?? 'Пользователь');
+
+    setState(() => _saving = true);
+    try {
+      await svc.createListing(
+        ownerId: auth.currentUser!.uid,
+        ownerEmail: auth.currentUser!.email ?? '',
+        ownerName: ownerName,
+        title: title,
+        description: desc,
+        category: _category,
+        subcategory: _subcategory, // ✅ ДОБАВИЛИ
+        price: price,
+        phone: phone,
+        phoneHidden: _phoneHidden,
+        city: city,
+        delivery: _delivery,
+        photos: _photos,
+
+        // авто
+        car: car,
+
+        // ✅ новые поля
+        dealType: dealType,
+        realEstateType: realEstateType,
+        clothesType: clothesType,
+      );
+
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Объявление отправлено на модерацию')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Ошибка: $e')));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Widget _selectTile({
+    required String title,
+    required String value,
+    required VoidCallback? onTap,
+    Widget? leading,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: Theme.of(context).colorScheme.outlineVariant,
+          ),
+        ),
+        child: Row(
+          children: [
+            if (leading != null) ...[leading, const SizedBox(width: 10)],
+            Expanded(
+              child: Text(
+                value.isEmpty ? title : value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: value.isEmpty
+                      ? Theme.of(context).colorScheme.outline
+                      : Theme.of(context).colorScheme.onSurface,
+                ),
+              ),
+            ),
+            const Icon(Icons.chevron_right),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _drop({
+    required String label,
+    required String value,
+    required List<String> items,
+    required ValueChanged<String?> onChanged,
+  }) {
+    return DropdownButtonFormField<String>(
+      value: value,
+      items: items
+          .map((x) => DropdownMenuItem(value: x, child: Text(x)))
+          .toList(),
+      onChanged: onChanged,
+      decoration: InputDecoration(labelText: label),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final categories = kCategories.where((c) => c != 'Все').toList();
+
+    final autoLine = [
+      if ((_autoBrand ?? '').trim().isNotEmpty) _autoBrand!.trim(),
+      if ((_autoModel ?? '').trim().isNotEmpty) _autoModel!.trim(),
+      if ((_autoGen ?? '').trim().isNotEmpty) _autoGen!.trim(),
+    ].join(' ').trim();
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Новое объявление')),
+      bottomNavigationBar: SafeArea(
+        top: false,
+        child: AnimatedPadding(
+          duration: const Duration(milliseconds: 150),
+          padding: EdgeInsets.only(
+            left: 12,
+            right: 12,
+            bottom: 12 + MediaQuery.of(context).viewInsets.bottom,
+          ),
+          child: FilledButton(
+            onPressed: _saving ? null : _save,
+            child: Text(_saving ? 'Сохраняем...' : 'Опубликовать'),
+          ),
+        ),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          DropdownButtonFormField<String>(
+            value: _category,
+            items: categories
+                .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                .toList(),
+            onChanged: (v) {
+              setState(() {
+                _category = v ?? _category;
+                // Сбросить подкатегорию при смене категории
+                final subs = kSubcategories[_category] ?? [];
+                _subcategory = subs.isNotEmpty ? subs.first : '';
+                _resetSmartFields();
+              });
+            },
+            decoration: const InputDecoration(labelText: 'Категория'),
+          ),
+
+          const SizedBox(height: 12),
+
+          // ✅ Подкатегория (если она есть)
+          if (kSubcategories.containsKey(_category))
+            DropdownButtonFormField<String>(
+              value: _subcategory,
+              items: (kSubcategories[_category] ?? [])
+                  .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                  .toList(),
+              onChanged: (v) {
+                setState(() => _subcategory = v ?? _subcategory);
+              },
+              decoration: const InputDecoration(labelText: 'Вид товара'),
+            ),
+
+          if (kSubcategories.containsKey(_category)) const SizedBox(height: 12),
+
+          // ✅ Недвижимость: сделка + тип
+          if (_isRealEstate) ...[
+            _drop(
+              label: 'Сделка',
+              value: _dealType,
+              items: _dealTypes,
+              onChanged: (v) => setState(() => _dealType = v ?? _dealType),
+            ),
+            const SizedBox(height: 12),
+            _drop(
+              label: 'Тип недвижимости',
+              value: _realEstateType,
+              items: _realEstateTypes,
+              onChanged: (v) =>
+                  setState(() => _realEstateType = v ?? _realEstateType),
+            ),
+            const SizedBox(height: 12),
+          ],
+
+          // ✅ Одежда: тип
+          if (_isClothes) ...[
+            _drop(
+              label: 'Тип одежды',
+              value: _clothesType,
+              items: _clothesTypes,
+              onChanged: (v) =>
+                  setState(() => _clothesType = v ?? _clothesType),
+            ),
+            const SizedBox(height: 12),
+          ],
+
+          // ✅ Авто: марка/модель/поколение
+          if (_isAuto) ...[
+            _selectTile(
+              title: 'Марка • Модель • Поколение (в одном окне)',
+              value: autoLine,
+              onTap: _openAutoPickerOneWindow,
+            ),
+            const SizedBox(height: 12),
+          ],
+
+          // ✅ Электроника: подкатегория
+          if (_isElectronics) ...[
+            _selectTile(
+              title: 'Подкатегория (в одном окне)',
+              value: _electronicsSub ?? '',
+              onTap: _openElectronicsPickerOneWindow,
+            ),
+            const SizedBox(height: 12),
+          ],
+
+          TextField(
+            controller: _title,
+            readOnly: _isAuto,
+            decoration: InputDecoration(
+              labelText: _isAuto
+                  ? 'Название (формируется автоматически)'
+                  : 'Название',
+            ),
+            onTap: _isAuto
+                ? () async {
+                    if (_autoBrand == null) await _openAutoPickerOneWindow();
+                  }
+                : null,
+          ),
+
+          const SizedBox(height: 12),
+
+          TextField(
+            controller: _price,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(labelText: 'Цена (₽)'),
+          ),
+
+          const SizedBox(height: 12),
+
+          Row(
+            children: [
+              Expanded(
+                child: _selectTile(
+                  title: 'Город / регион / село (выбрать)',
+                  value: _city.text.trim(),
+                  onTap: _openCityPickerOneWindow,
+                  leading: const Icon(Icons.location_city_outlined),
+                ),
+              ),
+              const SizedBox(width: 8),
+              InkWell(
+                onTap: _openMap,
+                borderRadius: BorderRadius.circular(12),
+                child: Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    color: Theme.of(context).colorScheme.primaryContainer,
+                  ),
+                  alignment: Alignment.center,
+                  child: const Icon(Icons.map_outlined, color: Colors.green),
+                ),
+              ),
+            ],
+          ),
+
+          // ✅ БЛОК “ПАРАМЕТРЫ АВТО”
+          if (_isAuto) ...[
+            const SizedBox(height: 18),
+            const Text(
+              'Параметры авто',
+              style: TextStyle(fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 10),
+
+            TextField(
+              controller: _carYear,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Год выпуска (например: 2018)',
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            TextField(
+              controller: _carMileage,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Пробег (км)'),
+            ),
+            const SizedBox(height: 12),
+
+            _drop(
+              label: 'Кузов',
+              value: _carBody,
+              items: _bodyTypes,
+              onChanged: (v) => setState(() => _carBody = v ?? _carBody),
+            ),
+            const SizedBox(height: 12),
+
+            _drop(
+              label: 'Топливо',
+              value: _carFuel,
+              items: _fuelTypes,
+              onChanged: (v) => setState(() => _carFuel = v ?? _carFuel),
+            ),
+            const SizedBox(height: 12),
+
+            TextField(
+              controller: _carEngine,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              decoration: const InputDecoration(
+                labelText: 'Объём двигателя (л), например: 2.5',
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            TextField(
+              controller: _carPower,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Мощность (л.с.), например: 181',
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            _drop(
+              label: 'Коробка передач',
+              value: _carTransmission,
+              items: _transmissions,
+              onChanged: (v) =>
+                  setState(() => _carTransmission = v ?? _carTransmission),
+            ),
+            const SizedBox(height: 12),
+
+            _drop(
+              label: 'Привод',
+              value: _carDrive,
+              items: _drives,
+              onChanged: (v) => setState(() => _carDrive = v ?? _carDrive),
+            ),
+            const SizedBox(height: 12),
+
+            _drop(
+              label: 'Состояние',
+              value: _carCondition,
+              items: _conditions,
+              onChanged: (v) =>
+                  setState(() => _carCondition = v ?? _carCondition),
+            ),
+            const SizedBox(height: 12),
+
+            _drop(
+              label: 'Цвет',
+              value: _carColor,
+              items: _colors,
+              onChanged: (v) => setState(() => _carColor = v ?? _carColor),
+            ),
+            const SizedBox(height: 12),
+
+            DropdownButtonFormField<String>(
+              value: _carCleared == null
+                  ? 'Не указано'
+                  : (_carCleared! ? 'Да' : 'Нет'),
+              items: const [
+                DropdownMenuItem(
+                  value: 'Не указано',
+                  child: Text('Растаможен: не указано'),
+                ),
+                DropdownMenuItem(value: 'Да', child: Text('Растаможен: да')),
+                DropdownMenuItem(value: 'Нет', child: Text('Растаможен: нет')),
+              ],
+              onChanged: (v) {
+                setState(() {
+                  if (v == 'Да')
+                    _carCleared = true;
+                  else if (v == 'Нет')
+                    _carCleared = false;
+                  else
+                    _carCleared = null;
+                });
+              },
+              decoration: const InputDecoration(
+                labelText: 'Растаможен (необязательно)',
+              ),
+            ),
+
+            const SizedBox(height: 12),
+
+            TextField(
+              controller: _carOwners,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Владельцев (необязательно)',
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            TextField(
+              controller: _carVin,
+              decoration: const InputDecoration(
+                labelText: 'VIN (необязательно)',
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            TextField(
+              controller: _carNote,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                labelText: 'Дополнительно (необязательно)',
+              ),
+            ),
+          ],
+
+          const SizedBox(height: 12),
+
+          TextField(
+            controller: _phone,
+            keyboardType: TextInputType.phone,
+            decoration: const InputDecoration(
+              labelText: 'Телефон (для звонка)',
+            ),
+          ),
+
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Скрывать номер в объявлении'),
+            subtitle: const Text(
+              'Номер не будет виден, но кнопка “Позвонить” останется',
+            ),
+            value: _phoneHidden,
+            onChanged: (v) => setState(() => _phoneHidden = v),
+          ),
+
+          const SizedBox(height: 12),
+
+          TextField(
+            controller: _desc,
+            maxLines: 5,
+            decoration: const InputDecoration(labelText: 'Описание'),
+          ),
+
+          const SizedBox(height: 16),
+
+          Text(
+            'Доставка',
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              color: Theme.of(context).colorScheme.onSurface,
+            ),
+          ),
+          const SizedBox(height: 8),
+
+          InkWell(
+            onTap: _openDeliveryPicker,
+            borderRadius: BorderRadius.circular(12),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                ),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.local_shipping_outlined, size: 20),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      _deliverySummary(),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.outline,
+                      ),
+                    ),
+                  ),
+                  const Icon(Icons.chevron_right),
+                ],
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 16),
+
+          Row(
+            children: [
+              FilledButton.icon(
+                onPressed: _photos.length >= 6 ? null : _openPhotoMenu,
+                icon: const Icon(Icons.add_a_photo_outlined),
+                label: Text('Фото (${_photos.length}/6)'),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Добавь минимум 1 фото — так лучше продаётся.',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.outline,
+                  ),
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 12),
+
+          if (_photos.isNotEmpty)
+            SizedBox(
+              height: 110,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: _photos.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 8),
+                itemBuilder: (_, i) => Stack(
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: kIsWeb
+                          ? Container(
+                              width: 110,
+                              height: 110,
+                              color: Colors.black12,
+                              alignment: Alignment.center,
+                              child: const Icon(Icons.photo, size: 28),
+                            )
+                          : Image.file(
+                              _photos[i],
+                              width: 110,
+                              height: 110,
+                              fit: BoxFit.cover,
+                            ),
+                    ),
+                    Positioned(
+                      right: 0,
+                      top: 0,
+                      child: IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => setState(() => _photos.removeAt(i)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+          const SizedBox(height: 90),
+        ],
+      ),
+    );
+  }
+}
