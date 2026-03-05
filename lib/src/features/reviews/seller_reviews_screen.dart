@@ -25,15 +25,21 @@ class _SellerReviewsScreenState extends State<SellerReviewsScreen> {
     super.initState();
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      final me = context.read<AuthService>().currentUser!;
+      final me = context.read<AuthService>().currentUser;
+      if (me == null) return;
+
       if (me.uid == widget.sellerId) {
-        await context.read<ReviewsService>().resetNewReviewsCount(widget.sellerId);
+        try {
+          await context.read<ReviewsService>().resetNewReviewsCount(widget.sellerId);
+        } catch (_) {}
       }
     });
   }
 
   Future<void> _openAddReview() async {
-    final me = context.read<AuthService>().currentUser!;
+    final me = context.read<AuthService>().currentUser;
+    if (me == null) return;
+
     if (me.uid == widget.sellerId) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Нельзя оставить отзыв самому себе')),
@@ -61,11 +67,23 @@ class _SellerReviewsScreenState extends State<SellerReviewsScreen> {
       body: StreamBuilder<List<Map<String, dynamic>>>(
         stream: reviews.streamSellerReviews(widget.sellerId),
         builder: (context, snap) {
-          if (!snap.hasData) {
+          if (snap.hasError) {
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  'Ошибка отзывов:\n${snap.error}',
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            );
+          }
+
+          if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
             return const Center(child: CircularProgressIndicator());
           }
 
-          final items = snap.data!;
+          final items = snap.data ?? const <Map<String, dynamic>>[];
 
           return ListView(
             padding: const EdgeInsets.all(12),
@@ -92,10 +110,12 @@ class _SellerReviewsScreenState extends State<SellerReviewsScreen> {
                   ),
                 ),
 
-              ...items.map((r) => _ReviewTile(
-                    sellerId: widget.sellerId,
-                    review: r,
-                  )),
+              ...items.map(
+                (r) => _ReviewTile(
+                  sellerId: widget.sellerId,
+                  review: r,
+                ),
+              ),
             ],
           );
         },
@@ -118,16 +138,29 @@ class _ReviewTile extends StatelessWidget {
     return '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}';
   }
 
+  String _shortUid(String v) {
+    final s = v.trim();
+    if (s.length <= 10) return s;
+    return '${s.substring(0, 6)}…${s.substring(s.length - 4)}';
+  }
+
   @override
   Widget build(BuildContext context) {
-    final me = context.read<AuthService>().currentUser!;
-    final isSeller = me.uid == sellerId;
+    final me = context.read<AuthService>().currentUser;
+    final isSeller = me != null && me.uid == sellerId;
 
     final rating = (review['rating'] as num?)?.toInt() ?? 0;
-    final text = (review['text'] ?? '').toString();
-    final reviewerName = (review['reviewer_name'] ?? review['reviewerName'] ?? 'Пользователь').toString();
-    final createdAt = _dateText(review['created_at'] ?? review['createdAt']);
-    final replyText = (review['reply_text'] ?? review['replyText'] ?? '').toString().trim();
+    final text = (review['comment'] ?? '').toString().trim();
+
+    final reviewerNameRaw = (review['reviewer_name'] ?? '').toString().trim();
+    final reviewerId = (review['reviewer_id'] ?? '').toString().trim();
+
+    final reviewerName = reviewerNameRaw.isNotEmpty
+        ? reviewerNameRaw
+        : (reviewerId.isNotEmpty ? _shortUid(reviewerId) : 'Пользователь');
+
+    final createdAt = _dateText(review['created_at']);
+    final replyText = (review['reply_text'] ?? '').toString().trim();
 
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
@@ -164,8 +197,9 @@ class _ReviewTile extends StatelessWidget {
             ),
 
             const SizedBox(height: 8),
-            Text(text),
+            Text(text.isEmpty ? '—' : text),
 
+            // ✅ Ответ продавца (если есть)
             if (replyText.isNotEmpty) ...[
               const SizedBox(height: 10),
               Container(
@@ -179,6 +213,7 @@ class _ReviewTile extends StatelessWidget {
               ),
             ],
 
+            // ✅ Кнопка для продавца: ответить / изменить ответ
             if (isSeller) ...[
               const SizedBox(height: 10),
               TextButton.icon(
@@ -189,11 +224,18 @@ class _ReviewTile extends StatelessWidget {
                   );
                   if (res == null || res.trim().isEmpty) return;
 
-                  await context.read<ReviewsService>().replyToReview(
-                        sellerId: sellerId,
-                        reviewId: (review['id'] ?? '').toString(),
-                        replyText: res,
-                      );
+                  try {
+                    await context.read<ReviewsService>().replyToReview(
+                          sellerId: sellerId,
+                          reviewId: (review['id'] ?? '').toString(),
+                          replyText: res,
+                        );
+                  } catch (e) {
+                    if (!context.mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Ошибка: $e')),
+                    );
+                  }
                 },
                 icon: const Icon(Icons.reply),
                 label: Text(replyText.isEmpty ? 'Ответить' : 'Изменить ответ'),
@@ -228,10 +270,12 @@ class _AddReviewSheetState extends State<_AddReviewSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final me = context.read<AuthService>().currentUser!;
-    final name = (me.displayName?.trim().isNotEmpty ?? false)
-        ? me.displayName!.trim()
-        : (me.email ?? 'Пользователь');
+    final me = context.read<AuthService>().currentUser;
+
+    // ✅ ВАЖНО: берём имя из AuthService (displayName), если нет — email
+    final reviewerName = (me?.displayName?.trim().isNotEmpty ?? false)
+        ? me!.displayName!.trim()
+        : (me?.email ?? 'Пользователь');
 
     return Padding(
       padding: EdgeInsets.only(
@@ -276,6 +320,9 @@ class _AddReviewSheetState extends State<_AddReviewSheet> {
               onPressed: _saving
                   ? null
                   : () async {
+                      final me = context.read<AuthService>().currentUser;
+                      if (me == null) return;
+
                       final text = _ctrl.text.trim();
                       if (text.isEmpty) return;
 
@@ -284,12 +331,22 @@ class _AddReviewSheetState extends State<_AddReviewSheet> {
                         await context.read<ReviewsService>().addReview(
                               sellerId: widget.sellerId,
                               reviewerId: me.uid,
-                              reviewerName: name,
+                              reviewerName: reviewerName,
                               listingId: widget.listingId,
                               rating: _rating,
                               text: text,
                             );
-                        if (context.mounted) Navigator.pop(context);
+
+                        if (!context.mounted) return;
+                        Navigator.pop(context);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Отзыв отправлен успешно')),
+                        );
+                      } catch (e) {
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Ошибка: $e')),
+                        );
                       } finally {
                         if (mounted) setState(() => _saving = false);
                       }
@@ -312,8 +369,7 @@ class _ReplyDialog extends StatefulWidget {
 }
 
 class _ReplyDialogState extends State<_ReplyDialog> {
-  late final TextEditingController _c =
-      TextEditingController(text: widget.initial);
+  late final TextEditingController _c = TextEditingController(text: widget.initial);
 
   @override
   void dispose() {
@@ -331,12 +387,8 @@ class _ReplyDialogState extends State<_ReplyDialog> {
         decoration: const InputDecoration(hintText: 'Например: Спасибо за отзыв!'),
       ),
       actions: [
-        TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Отмена')),
-        FilledButton(
-            onPressed: () => Navigator.pop(context, _c.text),
-            child: const Text('Сохранить')),
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Отмена')),
+        FilledButton(onPressed: () => Navigator.pop(context, _c.text), child: const Text('Сохранить')),
       ],
     );
   }

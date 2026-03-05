@@ -10,24 +10,10 @@ class ChatService {
   final _uuid = const Uuid();
 
   // =========================
-  // HELPERS
-  // =========================
-
-  List<String> _toStringList(dynamic v) {
-    if (v is List) return v.map((e) => e.toString()).toList();
-    return <String>[];
-  }
-
-  Map<String, dynamic> _toMap(dynamic v) {
-    if (v is Map) return Map<String, dynamic>.from(v);
-    return <String, dynamic>{};
-  }
-
-  // =========================
   // STREAMS
   // =========================
 
-  /// В твоей версии stream-builder не умеет server-side eq/match, поэтому фильтруем на клиенте
+  /// Чаты пользователя (buyer_id или seller_id)
   Stream<List<Chat>> streamMyChats(String uid) {
     final stream = _db
         .from('chats')
@@ -35,23 +21,18 @@ class ChatService {
         .order('updated_at', ascending: false);
 
     return stream.map((rows) {
-      final items = <Chat>[];
+      final out = <Chat>[];
 
       for (final r in rows) {
-        final memberIds = _toStringList(r['member_ids']);
-        if (!memberIds.contains(uid)) continue;
+        final buyerId = (r['buyer_id'] ?? '').toString();
+        final sellerId = (r['seller_id'] ?? '').toString();
+        if (buyerId != uid && sellerId != uid) continue;
 
-        // ⚠️ Chat.fromDoc был под Firestore.
-        // Поэтому делаем совместимый Map и используем fromMap (если есть),
-        // иначе создаём через Chat.fromJson/constructor — зависит от твоей модели.
-        //
-        // Если у тебя есть Chat.fromMap(Map), используй его.
-        // Ниже предполагаю, что есть Chat.fromMap / Chat.fromJson.
-        items.add(Chat.fromMap(_chatRowToCompatMap(r)));
+        out.add(Chat.fromMap(Map<String, dynamic>.from(r)));
       }
 
-      items.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
-      return items;
+      out.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+      return out;
     });
   }
 
@@ -60,14 +41,18 @@ class ChatService {
 
     return stream.map((rows) {
       int total = 0;
-      for (final r in rows) {
-        final memberIds = _toStringList(r['member_ids']);
-        if (!memberIds.contains(uid)) continue;
 
-        final unread = _toMap(r['unread']);
-        final v = unread[uid];
-        if (v is num) total += v.toInt();
+      for (final r in rows) {
+        final buyerId = (r['buyer_id'] ?? '').toString();
+        final sellerId = (r['seller_id'] ?? '').toString();
+        if (buyerId != uid && sellerId != uid) continue;
+
+        final ub = (r['unread_for_buyer'] as num?)?.toInt() ?? 0;
+        final us = (r['unread_for_seller'] as num?)?.toInt() ?? 0;
+
+        total += (uid == buyerId) ? ub : us;
       }
+
       return total;
     });
   }
@@ -79,50 +64,52 @@ class ChatService {
         .order('created_at', ascending: false);
 
     return stream.map((rows) {
-      final items = <ChatMessage>[];
+      final out = <ChatMessage>[];
       for (final r in rows) {
-        if (r['chat_id']?.toString() != chatId) continue;
-        items.add(ChatMessage.fromMap(_msgRowToCompatMap(r)));
+        if ((r['chat_id'] ?? '').toString() != chatId) continue;
+        out.add(ChatMessage.fromMap(Map<String, dynamic>.from(r)));
       }
-      return items;
+      return out;
     });
   }
 
   // =========================
-  // CREATE / GET CHAT
+  // GET / CREATE CHAT
   // =========================
 
   Future<String> getOrCreateChat({
     required String listingId,
     required String listingTitle,
     required String buyerId,
-    required String buyerEmail,
     required String sellerId,
-    required String sellerEmail,
   }) async {
-    final chatId = '${listingId}_$buyerId';
+    final existing = await _db
+        .from('chats')
+        .select('id')
+        .eq('listing_id', listingId)
+        .eq('buyer_id', buyerId)
+        .eq('seller_id', sellerId)
+        .maybeSingle();
 
-    final existing = await _db.from('chats').select('id').eq('id', chatId).maybeSingle();
-    if (existing != null) return chatId;
+    if (existing != null && existing['id'] != null) {
+      return existing['id'].toString();
+    }
+
+    final newId = _uuid.v4();
 
     await _db.from('chats').insert({
-      'id': chatId,
+      'id': newId,
       'listing_id': listingId,
       'listing_title': listingTitle,
-      'member_ids': [buyerId, sellerId], // text[]
-      'member_emails': {
-        buyerId: buyerEmail,
-        sellerId: sellerEmail,
-      }, // jsonb
+      'buyer_id': buyerId,
+      'seller_id': sellerId,
       'last_message': '',
-      'updated_at': DateTime.now().toUtc(),
-      'unread': {
-        buyerId: 0,
-        sellerId: 0,
-      }, // jsonb
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+      'unread_for_buyer': 0,
+      'unread_for_seller': 0,
     });
 
-    return chatId;
+    return newId;
   }
 
   // =========================
@@ -133,12 +120,22 @@ class ChatService {
     required String chatId,
     required String uid,
   }) async {
-    // unread — jsonb, перезапишем ключ uid в 0
-    final row = await _db.from('chats').select('unread').eq('id', chatId).maybeSingle();
-    final unread = _toMap(row?['unread']);
-    unread[uid] = 0;
+    final chat = await _db
+        .from('chats')
+        .select('buyer_id, seller_id')
+        .eq('id', chatId)
+        .maybeSingle();
 
-    await _db.from('chats').update({'unread': unread}).eq('id', chatId);
+    if (chat == null) return;
+
+    final buyerId = (chat['buyer_id'] ?? '').toString();
+    final sellerId = (chat['seller_id'] ?? '').toString();
+
+    if (uid == buyerId) {
+      await _db.from('chats').update({'unread_for_buyer': 0}).eq('id', chatId);
+    } else if (uid == sellerId) {
+      await _db.from('chats').update({'unread_for_seller': 0}).eq('id', chatId);
+    }
   }
 
   // =========================
@@ -150,33 +147,43 @@ class ChatService {
     required String senderId,
     required String text,
   }) async {
-    final chat = await _db.from('chats').select('*').eq('id', chatId).maybeSingle();
+    final t = text.trim();
+    if (t.isEmpty) return;
+
+    final chat = await _db
+        .from('chats')
+        .select('buyer_id, seller_id, unread_for_buyer, unread_for_seller')
+        .eq('id', chatId)
+        .maybeSingle();
+
     if (chat == null) throw Exception('Чат не найден');
 
-    final memberIds = _toStringList(chat['member_ids']);
-    final otherId = memberIds.firstWhere((x) => x != senderId, orElse: () => '');
+    final buyerId = (chat['buyer_id'] ?? '').toString();
+    final sellerId = (chat['seller_id'] ?? '').toString();
 
-    // 1) вставляем сообщение
     await _db.from('chat_messages').insert({
       'id': _uuid.v4(),
       'chat_id': chatId,
       'sender_id': senderId,
-      'text': text,
+      'text': t,
       'image_url': null,
-      'created_at': DateTime.now().toUtc(),
+      'created_at': DateTime.now().toUtc().toIso8601String(),
     });
 
-    // 2) обновляем чат
-    final unread = _toMap(chat['unread']);
-    if (otherId.isNotEmpty) {
-      final cur = unread[otherId];
-      unread[otherId] = (cur is num ? cur.toInt() : 0) + 1;
+    int ub = (chat['unread_for_buyer'] as num?)?.toInt() ?? 0;
+    int us = (chat['unread_for_seller'] as num?)?.toInt() ?? 0;
+
+    if (senderId == buyerId) {
+      us += 1;
+    } else if (senderId == sellerId) {
+      ub += 1;
     }
 
     await _db.from('chats').update({
-      'last_message': text,
-      'updated_at': DateTime.now().toUtc(),
-      'unread': unread,
+      'last_message': t,
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+      'unread_for_buyer': ub,
+      'unread_for_seller': us,
     }).eq('id', chatId);
   }
 
@@ -189,24 +196,34 @@ class ChatService {
     required String senderId,
     required File file,
   }) async {
-    final chat = await _db.from('chats').select('*').eq('id', chatId).maybeSingle();
+    final chat = await _db
+        .from('chats')
+        .select('buyer_id, seller_id, unread_for_buyer, unread_for_seller')
+        .eq('id', chatId)
+        .maybeSingle();
+
     if (chat == null) throw Exception('Чат не найден');
 
-    final memberIds = _toStringList(chat['member_ids']);
-    final otherId = memberIds.firstWhere((x) => x != senderId, orElse: () => '');
+    final buyerId = (chat['buyer_id'] ?? '').toString();
+    final sellerId = (chat['seller_id'] ?? '').toString();
 
-    // upload image -> Supabase Storage
+    const bucket = 'chat_images'; // bucket должен существовать
+
     final fileId = _uuid.v4();
     final path = '$chatId/$fileId.jpg';
 
     final bytes = await file.readAsBytes();
-    await _db.storage.from('chat_images').uploadBinary(
-          path,
-          bytes,
-          fileOptions: const FileOptions(cacheControl: '3600', upsert: false),
-        );
+    await _db.storage.from(bucket).uploadBinary(
+      path,
+      bytes,
+      fileOptions: const FileOptions(
+        cacheControl: '3600',
+        upsert: false,
+        contentType: 'image/jpeg',
+      ),
+    );
 
-    final url = _db.storage.from('chat_images').getPublicUrl(path);
+    final url = _db.storage.from(bucket).getPublicUrl(path);
 
     await _db.from('chat_messages').insert({
       'id': _uuid.v4(),
@@ -214,69 +231,70 @@ class ChatService {
       'sender_id': senderId,
       'text': '',
       'image_url': url,
-      'created_at': DateTime.now().toUtc(),
+      'created_at': DateTime.now().toUtc().toIso8601String(),
     });
 
-    final unread = _toMap(chat['unread']);
-    if (otherId.isNotEmpty) {
-      final cur = unread[otherId];
-      unread[otherId] = (cur is num ? cur.toInt() : 0) + 1;
+    int ub = (chat['unread_for_buyer'] as num?)?.toInt() ?? 0;
+    int us = (chat['unread_for_seller'] as num?)?.toInt() ?? 0;
+
+    if (senderId == buyerId) {
+      us += 1;
+    } else if (senderId == sellerId) {
+      ub += 1;
     }
 
     await _db.from('chats').update({
       'last_message': '📷 Фото',
-      'updated_at': DateTime.now().toUtc(),
-      'unread': unread,
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+      'unread_for_buyer': ub,
+      'unread_for_seller': us,
     }).eq('id', chatId);
   }
 
   // =========================
-  // DELETE CHAT + MESSAGES
+  // DELETE CHAT
   // =========================
 
   Future<void> deleteChat({
     required String chatId,
     required String uid,
   }) async {
-    final chat = await _db.from('chats').select('*').eq('id', chatId).maybeSingle();
+    final chat = await _db
+        .from('chats')
+        .select('buyer_id, seller_id')
+        .eq('id', chatId)
+        .maybeSingle();
+
     if (chat == null) return;
 
-    final memberIds = _toStringList(chat['member_ids']);
-    if (!memberIds.contains(uid)) throw Exception('Нет доступа к удалению чата');
+    final buyerId = (chat['buyer_id'] ?? '').toString();
+    final sellerId = (chat['seller_id'] ?? '').toString();
 
-    // удаляем сообщения
+    if (uid != buyerId && uid != sellerId) {
+      throw Exception('Нет доступа к удалению чата');
+    }
+
     await _db.from('chat_messages').delete().eq('chat_id', chatId);
-
-    // удаляем чат
     await _db.from('chats').delete().eq('id', chatId);
-
-    // storage очистку можно добавить позже (list/remove)
   }
 
-  // =========================
-  // COMPAT MAPS FOR MODELS
-  // =========================
+  Future<void> deleteMessage({
+    required String chatId,
+    required String messageId,
+    required String uid,
+  }) async {
+    final msg = await _db
+        .from('chat_messages')
+        .select('id, chat_id, sender_id')
+        .eq('id', messageId)
+        .maybeSingle();
 
-  Map<String, dynamic> _chatRowToCompatMap(Map<String, dynamic> r) {
-    return {
-      'id': r['id'],
-      'listingId': r['listing_id'],
-      'listingTitle': r['listing_title'],
-      'memberIds': r['member_ids'],
-      'memberEmails': r['member_emails'],
-      'lastMessage': r['last_message'],
-      'updatedAt': r['updated_at'],
-      'unread': r['unread'],
-    };
-  }
+    if (msg == null) return;
+    if ((msg['chat_id'] ?? '').toString() != chatId) return;
+    if ((msg['sender_id'] ?? '').toString() != uid) {
+      throw Exception('Можно удалить только своё сообщение');
+    }
 
-  Map<String, dynamic> _msgRowToCompatMap(Map<String, dynamic> r) {
-    return {
-      'id': r['id'],
-      'senderId': r['sender_id'],
-      'text': r['text'],
-      'imageUrl': r['image_url'],
-      'createdAt': r['created_at'],
-    };
+    await _db.from('chat_messages').delete().eq('id', messageId);
   }
 }

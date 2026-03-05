@@ -1,126 +1,132 @@
-// lib/src/services/auth_service.dart
-import 'package:supabase_flutter/supabase_flutter.dart' as sb;
+import 'package:supabase_flutter/supabase_flutter.dart';
 
-/// Простой пользователь, похожий на Firebase User
-class AppUser {
-  final String uid;
-  final String? email;
-  final String? displayName;
+/// Адаптер под проект:
+/// Supabase auth: user.id
+/// Проект: uid
+class AuthUser {
+final String uid;
+final String? email;
 
-  /// Аналог Firebase: user.emailVerified
-  final bool emailVerified;
+/// Может быть в metadata, но UI мы будем брать из таблицы users
+final String? displayName;
 
-  /// Аналог Firebase: user.photoURL
-  final String? photoURL;
+/// Может быть в metadata (avatar_url / photo_url / picture)
+final String? photoUrl;
 
-  const AppUser({
-    required this.uid,
-    this.email,
-    this.displayName,
-    required this.emailVerified,
-    this.photoURL,
-  });
+const AuthUser({
+required this.uid,
+this.email,
+this.displayName,
+this.photoUrl,
+});
 }
 
 class AuthService {
-  final sb.SupabaseClient _client = sb.Supabase.instance.client;
+final SupabaseClient _db = Supabase.instance.client;
 
-  /// Стрим изменений авторизации (аналог Firebase authStateChanges)
-  ///
-  /// Важно: сначала эмитим текущее состояние, потом слушаем onAuthStateChange.
-  Stream<AppUser?> authStateChanges() async* {
-    // 1) текущее состояние
-    yield currentUser;
+Stream<AuthState> get onAuthStateChange => _db.auth.onAuthStateChange;
 
-    // 2) изменения
-    yield* _client.auth.onAuthStateChange.map((_) {
-      final u = _client.auth.currentUser;
-      return u == null ? null : _fromSbUser(u);
-    });
-  }
+AuthUser? get currentUser {
+final u = _db.auth.currentUser;
+if (u == null) return null;
 
-  /// Текущий пользователь (или null)
-  AppUser? get currentUser {
-    final sb.User? u = _client.auth.currentUser;
-    if (u == null) return null;
-    return _fromSbUser(u);
-  }
+final meta = u.userMetadata;
 
-  AppUser _fromSbUser(sb.User u) {
-    final meta = u.userMetadata ?? const <String, dynamic>{};
+String? _pick(dynamic v) {
+if (v == null) return null;
+final s = v.toString().trim();
+return s.isEmpty ? null : s;
+}
 
-    final name = (meta['displayName'] ??
-            meta['display_name'] ??
-            meta['name'])
-        ?.toString();
+final displayName = _pick(
+meta?['display_name'] ??
+meta?['displayName'] ??
+meta?['name'] ??
+meta?['full_name'] ??
+meta?['username'],
+);
 
-    final photo = (meta['photoURL'] ??
-            meta['photo_url'] ??
-            meta['avatar_url'] ??
-            meta['avatarUrl'])
-        ?.toString();
+final photoUrl = _pick(
+meta?['avatar_url'] ??
+meta?['photo_url'] ??
+meta?['photoUrl'] ??
+meta?['picture'],
+);
 
-    // В Supabase email подтверждён, если emailConfirmedAt != null
-    final verified = u.emailConfirmedAt != null;
+return AuthUser(
+uid: u.id,
+email: u.email,
+displayName: displayName,
+photoUrl: photoUrl,
+);
+}
 
-    return AppUser(
-      uid: u.id,
-      email: u.email,
-      displayName: name,
-      emailVerified: verified,
-      photoURL: photo,
-    );
-  }
+Future<AuthUser> signIn({
+required String email,
+required String password,
+}) async {
+final res = await _db.auth.signInWithPassword(
+email: email.trim(),
+password: password,
+);
 
-  /// Регистрация по email + password
-  Future<void> signUp({
-    required String email,
-    required String password,
-    Map<String, dynamic>? data,
-  }) async {
-    final res = await _client.auth.signUp(
-      email: email,
-      password: password,
-      data: data,
-    );
+final u = res.user;
+if (u == null) throw Exception('Не удалось войти. Пользователь не получен.');
+return currentUser ?? AuthUser(uid: u.id, email: u.email);
+}
 
-    if (res.user == null) {
-      throw Exception('Не удалось создать пользователя');
-    }
-  }
+Future<AuthUser> signUp({
+required String email,
+required String password,
+String? displayName,
+String? phone,
+}) async {
+final res = await _db.auth.signUp(
+email: email.trim(),
+password: password,
+data: {
+if (displayName != null && displayName.trim().isNotEmpty)
+'display_name': displayName.trim(),
+if (displayName != null && displayName.trim().isNotEmpty)
+'name': displayName.trim(),
+if (phone != null && phone.trim().isNotEmpty) 'phone': phone.trim(),
+},
+);
 
-  /// Вход по email + password
-  Future<void> signIn({
-    required String email,
-    required String password,
-  }) async {
-    final res = await _client.auth.signInWithPassword(
-      email: email,
-      password: password,
-    );
-    if (res.session == null) {
-      throw Exception('Не удалось войти');
-    }
-  }
+final u = res.user;
+if (u == null) throw Exception('Не удалось зарегистрироваться. Пользователь не получен.');
+return AuthUser(uid: u.id, email: u.email);
+}
 
-  /// Повторно отправить письмо подтверждения (если включено подтверждение email в Supabase)
-  Future<void> sendVerificationEmail() async {
-    final email = _client.auth.currentUser?.email;
-    if (email == null || email.isEmpty) return;
+Future<void> signOut() async {
+await _db.auth.signOut();
+}
 
-    await _client.auth.resend(
-      type: sb.OtpType.signup,
-      email: email,
-    );
-  }
+/// ✅ Обновить metadata в Auth (не таблицу users!)
+Future<void> updateAuthMetadata({
+String? displayName,
+String? photoUrl,
+}) async {
+final data = <String, dynamic>{};
 
-  /// Обновление данных пользователя
-  Future<void> reloadUser() async {
-    await _client.auth.getUser();
-  }
+if (displayName != null && displayName.trim().isNotEmpty) {
+data['display_name'] = displayName.trim();
+data['name'] = displayName.trim();
+}
+if (photoUrl != null && photoUrl.trim().isNotEmpty) {
+data['avatar_url'] = photoUrl.trim();
+}
 
-  /// Выход
-  Future<void> signOut() async {
-    await _client.auth.signOut();
-  }
+if (data.isEmpty) return;
+
+await _db.auth.updateUser(UserAttributes(data: data));
+}
+
+/// ✅ ВАЖНО: алиас под твой UI-код (ProfileScreen вызывает updateProfile)
+Future<void> updateProfile({
+String? displayName,
+String? photoUrl,
+}) async {
+await updateAuthMetadata(displayName: displayName, photoUrl: photoUrl);
+}
 }

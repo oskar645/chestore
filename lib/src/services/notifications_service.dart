@@ -1,0 +1,188 @@
+import 'dart:async';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+class NotificationsService {
+  final SupabaseClient _db = Supabase.instance.client;
+  static final Map<String, DateTime> _lastSeenGlobalAt = <String, DateTime>{};
+  static final StreamController<String> _unreadRecalc =
+      StreamController<String>.broadcast();
+
+  int _computeUnreadBadgeCount(
+    List<Map<String, dynamic>> rows,
+    String userId,
+  ) {
+    final seenAt = _lastSeenGlobalAt[userId];
+    var total = 0;
+
+    for (final r in rows) {
+      final scope = (r['scope'] ?? '').toString();
+      if (scope == 'personal') {
+        final sameUser = r['user_id']?.toString() == userId;
+        final unread = r['is_read'] != true;
+        if (sameUser && unread) total++;
+        continue;
+      }
+
+      if (scope == 'global') {
+        if (seenAt == null) {
+          total++;
+          continue;
+        }
+
+        final raw = r['created_at'];
+        DateTime? created;
+        if (raw is DateTime) created = raw.toUtc();
+        if (raw is String) created = DateTime.tryParse(raw)?.toUtc();
+        if (created != null && created.isAfter(seenAt)) {
+          total++;
+        }
+      }
+    }
+
+    return total;
+  }
+
+  Future<bool> _userExists(String userId) async {
+    final rows =
+        await _db.from('users').select('id').eq('id', userId).limit(1);
+    return (rows as List).isNotEmpty;
+  }
+
+  Stream<List<Map<String, dynamic>>> streamGlobal() {
+    final stream = _db.from('user_notifications').stream(primaryKey: ['id']);
+
+    return stream.map(
+      (rows) => rows
+          .where((r) => r['scope'] == 'global')
+          .map((r) => Map<String, dynamic>.from(r))
+          .toList(),
+    );
+  }
+
+  Stream<List<Map<String, dynamic>>> streamPersonal(String userId) {
+    final stream = _db.from('user_notifications').stream(primaryKey: ['id']);
+
+    return stream.map(
+      (rows) => rows
+          .where(
+            (r) => r['scope'] == 'personal' && r['user_id']?.toString() == userId,
+          )
+          .map((r) => Map<String, dynamic>.from(r))
+          .toList(),
+    );
+  }
+
+  Stream<int> streamUnreadPersonalCount(String userId) {
+    final stream = _db.from('user_notifications').stream(primaryKey: ['id']);
+    return stream.map(
+      (rows) => rows.where((r) {
+        final isPersonal = r['scope'] == 'personal';
+        final sameUser = r['user_id']?.toString() == userId;
+        final unread = r['is_read'] != true;
+        return isPersonal && sameUser && unread;
+      }).length,
+    );
+  }
+
+  Stream<int> streamUnreadBadgeCount(String userId) {
+    final dbStream = _db.from('user_notifications').stream(primaryKey: ['id']);
+
+    return Stream<int>.multi((controller) {
+      var latestRows = <Map<String, dynamic>>[];
+
+      void emit() {
+        controller.add(_computeUnreadBadgeCount(latestRows, userId));
+      }
+
+      final dbSub = dbStream.listen(
+        (rows) {
+          latestRows = rows.map((r) => Map<String, dynamic>.from(r)).toList();
+          emit();
+        },
+        onError: controller.addError,
+      );
+
+      final recalcSub = _unreadRecalc.stream.where((id) => id == userId).listen(
+            (_) => emit(),
+            onError: controller.addError,
+          );
+
+      controller.onCancel = () async {
+        await dbSub.cancel();
+        await recalcSub.cancel();
+      };
+    });
+  }
+
+  Future<void> markAllSeen(String userId) async {
+    _lastSeenGlobalAt[userId] = DateTime.now().toUtc();
+    _unreadRecalc.add(userId);
+    await markAllPersonalRead(userId);
+  }
+
+  Future<void> markPersonalReadById(String notificationId) async {
+    final row = await _db
+        .from('user_notifications')
+        .select('id, user_id')
+        .eq('id', notificationId)
+        .maybeSingle();
+
+    await _db
+        .from('user_notifications')
+        .update({'is_read': true})
+        .eq('id', notificationId);
+
+    final uid = row?['user_id']?.toString();
+    if (uid != null && uid.isNotEmpty) {
+      _unreadRecalc.add(uid);
+    }
+  }
+
+  Future<void> markAllPersonalRead(String userId) async {
+    await _db
+        .from('user_notifications')
+        .update({'is_read': true})
+        .eq('scope', 'personal')
+        .eq('user_id', userId);
+    _unreadRecalc.add(userId);
+  }
+
+  Future<void> sendGlobal({
+    required String title,
+    required String body,
+  }) async {
+    await _db.from('user_notifications').insert({
+      'user_id': null,
+      'scope': 'global',
+      'title': title,
+      'body': body,
+      'is_read': false,
+    });
+  }
+
+  Future<void> sendPersonal({
+    required String userId,
+    required String title,
+    required String body,
+  }) async {
+    final isUuid = RegExp(
+      r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$',
+    ).hasMatch(userId);
+    if (!isUuid) {
+      throw const FormatException('Invalid user_id format (UUID expected)');
+    }
+
+    final exists = await _userExists(userId);
+    if (!exists) {
+      throw StateError('User with this user_id was not found');
+    }
+
+    await _db.from('user_notifications').insert({
+      'user_id': userId,
+      'scope': 'personal',
+      'title': title,
+      'body': body,
+      'is_read': false,
+    });
+  }
+}

@@ -1,5 +1,6 @@
 import 'package:chestore2/src/features/profile/change_password_screen.dart';
 import 'package:chestore2/src/features/support/support_screen.dart';
+import 'package:chestore2/src/features/notifications/notifications_screen.dart';
 import 'package:chestore2/src/services/auth_service.dart';
 import 'package:chestore2/src/services/profile_service.dart';
 import 'package:flutter/material.dart';
@@ -34,7 +35,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
       final data = await profile.getProfile(uid);
 
-      _nameCtrl.text = (data['display_name'] ?? data['displayName'] ?? data['name'] ?? '').toString();
+      _nameCtrl.text =
+          (data['display_name'] ?? data['displayName'] ?? data['name'] ?? '')
+              .toString();
       _phoneCtrl.text = (data['phone'] ?? '').toString();
 
       if (mounted) setState(() {});
@@ -181,11 +184,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
           _sectionTitle('Приложение'),
 
+          // УВЕДОМЛЕНИЯ – теперь открывается экран уведомлений
           _tile(
             icon: Icons.notifications_none,
             title: 'Уведомления',
-            subtitle: 'Сообщения, избранное',
-            onTap: _notReady,
+            subtitle: 'Общие и личные уведомления',
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const NotificationsScreen(),
+                ),
+              );
+            },
           ),
 
           _tile(

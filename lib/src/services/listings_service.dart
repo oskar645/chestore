@@ -1,6 +1,6 @@
 // lib/src/services/listings_service.dart
 import 'dart:io';
-import 'package:flutter/foundation.dart' show kIsWeb; // ✅ ДОБАВИЛИ
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 
 import 'package:chestore2/src/models/car_specs.dart';
 import 'package:chestore2/src/models/listing.dart';
@@ -10,6 +10,9 @@ import 'package:uuid/uuid.dart';
 class ListingsService {
   final SupabaseClient _client = Supabase.instance.client;
   final _uuid = const Uuid();
+
+  // ✅ ВАЖНО: грузим в PUBLIC bucket
+  static const String _bucket = 'listing-photos';
 
   // =========================
   // ЛЕНТА: только approved
@@ -26,15 +29,12 @@ class ListingsService {
     return stream.map((rows) {
       var items = rows.map((r) => Listing.fromMap(r)).toList();
 
-      // только approved
       items = items.where((x) => x.status == 'approved').toList();
 
-      // категория
       if (category != 'Все') {
         items = items.where((x) => x.category == category).toList();
       }
 
-      // поиск
       final s = search.trim().toLowerCase();
       if (s.isNotEmpty) {
         items = items.where((x) => x.title.toLowerCase().contains(s)).toList();
@@ -64,6 +64,53 @@ class ListingsService {
   }
 
   // =========================
+  // ✅ НОВОЕ: ОБЪЯВЛЕНИЯ ПРОДАВЦА (для профиля как Avito)
+  // =========================
+  Stream<List<Listing>> streamListingsByOwner(String ownerId) {
+    return streamListingsByOwnerAll(ownerId).map(
+      (items) => items.where((x) => x.status == 'approved').toList(),
+    );
+  }
+
+  Stream<List<Listing>> streamListingsByOwnerAll(String ownerId) {
+    final stream = _client
+        .from('listings')
+        .stream(primaryKey: ['id'])
+        .eq('owner_id', ownerId)
+        .order('created_at', ascending: false);
+
+    return stream.map((rows) => rows.map((r) => Listing.fromMap(r)).toList());
+  }
+
+  Stream<List<Listing>> streamMyListingsByStatuses(
+    String uid, {
+    required Set<String> statuses,
+  }) {
+    return streamMyListings(uid).map(
+      (items) => items.where((x) => statuses.contains(x.status)).toList(),
+    );
+  }
+
+  // =========================
+  // ✅ НОВОЕ: для кнопки "Написать" в профиле продавца
+  // Берём любое последнее approved объявление продавца
+  // (чтобы создать чат через listing_id + title)
+  // =========================
+  Future<Listing?> getLatestApprovedListingByOwner(String ownerId) async {
+    final row = await _client
+        .from('listings')
+        .select('*')
+        .eq('owner_id', ownerId)
+        .eq('status', 'approved')
+        .order('created_at', ascending: false)
+        .limit(1)
+        .maybeSingle();
+
+    if (row == null) return null;
+    return Listing.fromMap(row);
+  }
+
+  // =========================
   // СОЗДАТЬ -> pending
   // =========================
   Future<void> createListing({
@@ -73,58 +120,66 @@ class ListingsService {
     required String title,
     required String description,
     required String category,
-    required String subcategory, // ✅ ДОБАВИЛИ
+    required String subcategory,
     required int price,
     required String phone,
     required bool phoneHidden,
     required String city,
     required Map<String, bool> delivery,
     required List<File> photos,
-
-    // авто
     CarSpecs? car,
-
-    // новые поля
     String? dealType,
     String? realEstateType,
     String? clothesType,
   }) async {
     final listingId = _uuid.v4();
 
-    // 1) загрузка фото в Supabase Storage (bucket "listings")
     final urls = <String>[];
-    
-    // ✅ На веб-версии работает по-другому
+
     if (!kIsWeb) {
-      // МОБИЛЬНАЯ версия
       for (var i = 0; i < photos.length; i++) {
-        final file = photos[i];
-        final ext = file.path.split('.').last;
+        try {
+          final file = photos[i];
+          final ext = file.path.split('.').last.toLowerCase();
 
-        // bucket: listings, путь: <listingId>/<index>.<ext>
-        final path = '$listingId/$i.$ext';
+          // ✅ ограничим расширения (иначе бывает странный content-type)
+          final safeExt =
+              (ext == 'jpg' || ext == 'jpeg' || ext == 'png' || ext == 'webp')
+                  ? ext
+                  : 'jpg';
 
-        final bytes = await file.readAsBytes();
+          final path = '$listingId/$i.$safeExt';
+          final bytes = await file.readAsBytes();
 
-        await _client.storage.from('listings').uploadBinary(
-              path,
-              bytes,
-              fileOptions: const FileOptions(
-                cacheControl: '3600',
-                upsert: false,
-              ),
-            );
+          final contentType = switch (safeExt) {
+            'png' => 'image/png',
+            'webp' => 'image/webp',
+            _ => 'image/jpeg',
+          };
 
-        final publicUrl = _client.storage.from('listings').getPublicUrl(path);
-        urls.add(publicUrl);
+          await _client.storage.from(_bucket).uploadBinary(
+                path,
+                bytes,
+                fileOptions: FileOptions(
+                  cacheControl: '3600',
+                  upsert: false,
+                  contentType: contentType,
+                ),
+              );
+
+          final publicUrl = _client.storage.from(_bucket).getPublicUrl(path);
+
+          debugPrint('PHOTO URL [$i]: $publicUrl');
+          urls.add(publicUrl);
+        } catch (e) {
+          debugPrint('Ошибка загрузки фото $i: $e');
+        }
       }
     } else {
-      // ВЕБ версия - пока пропускаем загрузку фото
-      // На производстве нужно использовать Uint8List вместо File
-      urls.add('https://via.placeholder.com/400'); // Плейсхолдер
+      // WEB (пока заглушка)
+      urls.add('https://via.placeholder.com/400');
     }
 
-    // 2) создаём запись в таблице listings
     final now = DateTime.now().toUtc();
 
     final data = <String, dynamic>{
@@ -135,14 +190,14 @@ class ListingsService {
       'title': title,
       'description': description,
       'category': category,
-      'subcategory': subcategory, // ✅ ДОБАВИЛИ
+      'subcategory': subcategory,
       'price': price,
       'phone': phone,
       'phone_hidden': phoneHidden,
       'city': city,
-      'delivery': delivery, // jsonb
-      'photo_urls': urls, // text[]
-      'car': car?.toMap(), // jsonb nullable
+      'delivery': delivery,
+      'photo_urls': urls,
+      'car': car?.toMap(),
       'deal_type': dealType,
       'real_estate_type': realEstateType,
       'clothes_type': clothesType,
@@ -160,11 +215,14 @@ class ListingsService {
   // УДАЛИТЬ
   // =========================
   Future<void> deleteListing({required Listing listing}) async {
-    await _client.from('listings').delete().eq('id', listing.id);
+    await _client
+        .from('listings')
+        .update({'status': 'deleted', 'updated_at': DateTime.now().toUtc().toIso8601String()})
+        .eq('id', listing.id);
   }
 
   // =========================
-  // +1 просмотр (простая версия)
+  // +1 просмотр
   // =========================
   Future<void> incrementView(String listingId) async {
     final row = await _client
@@ -185,7 +243,7 @@ class ListingsService {
   }
 
   // =========================
-  // ПОЛУЧИТЬ ОДНО ОБЪЯВЛЕНИЕ (для detail/edit)
+  // ПОЛУЧИТЬ ОДНО
   // =========================
   Future<Listing?> getListingById(String id) async {
     final row = await _client.from('listings').select('*').eq('id', id).maybeSingle();
@@ -194,7 +252,7 @@ class ListingsService {
   }
 
   // =========================
-  // ОБНОВИТЬ ОБЪЯВЛЕНИЕ (снова на модерацию)
+  // ОБНОВИТЬ (без фото)
   // =========================
   Future<void> updateListing({
     required String listingId,

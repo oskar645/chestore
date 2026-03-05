@@ -2,16 +2,19 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:chestore2/src/features/inbox/chat_screen.dart';
 import 'package:chestore2/src/features/listings/edit_listing_screen.dart';
 import 'package:chestore2/src/features/listings/photo_viewer_screen.dart';
+import 'package:chestore2/src/features/profile/seller_public_profile_screen.dart';
 import 'package:chestore2/src/features/reviews/seller_reviews_screen.dart';
 import 'package:chestore2/src/models/listing.dart';
 import 'package:chestore2/src/services/auth_service.dart';
 import 'package:chestore2/src/services/chat_service.dart';
 import 'package:chestore2/src/services/favorites_service.dart';
 import 'package:chestore2/src/services/listings_service.dart';
+import 'package:chestore2/src/services/presence_service.dart';
 import 'package:chestore2/src/utils/price_formatter.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
-import 'package:share_plus/share_plus.dart'; // ✅ ДОБАВИЛИ
+import 'package:share_plus/share_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:timeago/timeago.dart' as timeago;
 import 'package:url_launcher/url_launcher.dart';
@@ -27,6 +30,9 @@ class ListingDetailScreen extends StatefulWidget {
 class _ListingDetailScreenState extends State<ListingDetailScreen> {
   bool _viewCounted = false;
 
+  bool _showFullDescription = false;
+  bool _showAllSpecs = false;
+
   @override
   void initState() {
     super.initState();
@@ -34,6 +40,47 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
   }
 
   SupabaseClient get _sb => Supabase.instance.client;
+
+  // ✅ имя продавца
+  String _displayNameFromUserRow(Map<String, dynamic> u) {
+    String pick(dynamic v) => (v ?? '').toString().trim();
+
+    final d1 = pick(u['display_name']);
+    if (d1.isNotEmpty) return d1;
+
+    final d2 = pick(u['name']);
+    if (d2.isNotEmpty) return d2;
+
+    final d3 = pick(u['displayName']);
+    if (d3.isNotEmpty) return d3;
+
+    return 'Пользователь';
+  }
+
+  // ✅ аватар продавца
+  String _avatarUrlFromUserRow(Map<String, dynamic> u) {
+    String pick(dynamic v) => (v ?? '').toString().trim();
+
+    final a1 = pick(u['avatar_url']);
+    if (a1.isNotEmpty) return a1;
+
+    final a2 = pick(u['avatarUrl']);
+    if (a2.isNotEmpty) return a2;
+
+    final a3 = pick(u['photo_url']);
+    if (a3.isNotEmpty) return a3;
+
+    final a4 = pick(u['photoUrl']);
+    if (a4.isNotEmpty) return a4;
+
+    return '';
+  }
+
+  String _sellerInitial(String name) {
+    final t = name.trim();
+    if (t.isEmpty) return 'U';
+    return t.characters.first.toUpperCase();
+  }
 
   String _deliveryLabel(String key) {
     switch (key) {
@@ -89,12 +136,7 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
     }
   }
 
-  // -----------------------------
-  // ADMIN CHECK (Supabase)
-  // Таблица: admin_users (uid/id, is_admin)
-  // -----------------------------
   Stream<bool> _streamIsAdmin(String uid) {
-    // Если у тебя колонка называется не uid, а id — замени тут.
     return _sb
         .from('admin_users')
         .stream(primaryKey: ['uid'])
@@ -106,10 +148,6 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
     });
   }
 
-  // -----------------------------
-  // SELLER PROFILE (Supabase)
-  // Таблица: users (id, display_name, name)
-  // -----------------------------
   Stream<Map<String, dynamic>> _streamSellerProfile(String sellerId) {
     return _sb
         .from('users')
@@ -118,22 +156,15 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
         .map((rows) => rows.isNotEmpty ? Map<String, dynamic>.from(rows.first) : <String, dynamic>{});
   }
 
-  // -----------------------------
-  // REVIEWS (Supabase)
-  // Таблица: reviews (seller_id, rating)
-  // -----------------------------
   Stream<List<Map<String, dynamic>>> _streamSellerReviews(String sellerId) {
     return _sb
         .from('reviews')
         .stream(primaryKey: ['id'])
         .eq('seller_id', sellerId)
+        .order('created_at', ascending: false)
         .map((rows) => rows.map((e) => Map<String, dynamic>.from(e)).toList());
   }
 
-  // -----------------------------
-  // LISTING STREAM (Supabase)
-  // Таблица: listings (id = listingId)
-  // -----------------------------
   Stream<Map<String, dynamic>?> _streamListingRow(String listingId) {
     return _sb
         .from('listings')
@@ -195,7 +226,6 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
     if (ok != true) return;
 
     try {
-      // Таблица reports: listing_id, listing_owner_id, reporter_id, reason, comment, status, created_at
       await _sb.from('reports').insert({
         'listing_id': listingId,
         'listing_owner_id': listingOwnerId,
@@ -207,43 +237,218 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
       });
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Жалоба отправлена')),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Жалоба отправлена')));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Ошибка: $e')),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Ошибка: $e')));
     }
   }
 
-  // ✅ ПОДЕЛИТЬСЯ ОБЪЯВЛЕНИЕМ
-  Future<void> _shareAnnouncement(String listingId, String title) async {
-    // Ссылка на объявление (для deep linking)
-    // Можешь использовать твой домен или Firebase Dynamic Links
+  Future<void> _shareAnnouncement(
+    String listingId,
+    String title, {
+    String? photoUrl,
+  }) async {
     final shareLink = 'https://chestore.app/listing/$listingId';
-    
-    final message = '''🛍️ *$title*
 
-Посмотри это объявление в CheStore!
-
-$shareLink
-
-#CheStore''';
+    final message = 'Посмотри это объявление в CheStore:\n$shareLink';
 
     try {
-      await Share.share(
-        message,
-        subject: title,
-      );
+      final url = (photoUrl ?? '').trim();
+      if (url.isNotEmpty) {
+        final res = await http.get(Uri.parse(url));
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          await Share.shareXFiles(
+            [
+              XFile.fromData(
+                res.bodyBytes,
+                name: 'listing.jpg',
+                mimeType: 'image/jpeg',
+              ),
+            ],
+            text: message,
+            subject: title,
+          );
+          return;
+        }
+      }
+
+      await Share.share(message, subject: title);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Ошибка: $e')),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Ошибка: $e')));
       }
     }
+  }
+
+  List<MapEntry<String, String>> _carSpecsEntries(Listing listing) {
+    if (listing.car == null) return [];
+    final car = listing.car!;
+
+    final items = <MapEntry<String, String>>[
+      MapEntry('Марка', car.brand),
+      MapEntry('Модель', car.model),
+      if (car.generation.trim().isNotEmpty) MapEntry('Поколение', car.generation),
+      MapEntry('Год', '${car.year}'),
+      MapEntry('Пробег', '${car.mileageKm} км'),
+      MapEntry('Кузов', car.bodyType),
+      MapEntry('Топливо', car.fuel),
+      MapEntry('Двигатель', '${car.engineVolume.toStringAsFixed(1)} л'),
+      MapEntry('Мощность', '${car.powerHp} л.с.'),
+      MapEntry('Коробка', car.transmission),
+      MapEntry('Привод', car.drive),
+      MapEntry('Состояние', car.condition),
+      MapEntry('Цвет', car.color),
+      if (car.owners != null) MapEntry('Владельцев', '${car.owners}'),
+      if (car.isCleared != null) MapEntry('Растаможен', car.isCleared! ? 'Да' : 'Нет'),
+      if ((car.vin ?? '').trim().isNotEmpty) MapEntry('VIN', car.vin!.trim()),
+      if ((car.note ?? '').trim().isNotEmpty) MapEntry('Примечание', car.note!.trim()),
+    ];
+
+    return items;
+  }
+
+  Widget _buildDescriptionSection(BuildContext context, String description) {
+    final text = description.trim();
+    if (text.isEmpty) return const SizedBox.shrink();
+
+    final isLong = text.length > 180;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        color: Theme.of(context).colorScheme.surface,
+        border: Border.all(color: Theme.of(context).dividerColor.withOpacity(0.2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Описание', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+          const SizedBox(height: 10),
+          Text(
+            text,
+            maxLines: (!_showFullDescription && isLong) ? 4 : null,
+            overflow: (!_showFullDescription && isLong) ? TextOverflow.ellipsis : null,
+          ),
+          if (isLong) ...[
+            const SizedBox(height: 8),
+            InkWell(
+              onTap: () => setState(() => _showFullDescription = !_showFullDescription),
+              borderRadius: BorderRadius.circular(8),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Text(
+                  _showFullDescription ? 'Скрыть' : 'Показать полностью',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.primary,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCarSpecsSection(BuildContext context, List<MapEntry<String, String>> specs) {
+    if (specs.isEmpty) return const SizedBox.shrink();
+
+    final visible = _showAllSpecs ? specs : specs.take(3).toList();
+    final hasMore = specs.length > 3;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        color: Theme.of(context).colorScheme.surface,
+        border: Border.all(color: Theme.of(context).dividerColor.withOpacity(0.2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Характеристики', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+          const SizedBox(height: 10),
+          ...visible.map((e) => _kv(e.key, e.value)),
+          if (hasMore) ...[
+            const SizedBox(height: 6),
+            InkWell(
+              onTap: () => setState(() => _showAllSpecs = !_showAllSpecs),
+              borderRadius: BorderRadius.circular(8),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Text(
+                  _showAllSpecs ? 'Скрыть характеристики' : 'Показать все (${specs.length})',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.primary,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBottomActions({
+    required BuildContext context,
+    required bool canContact,
+    required String status,
+    required Listing listing,
+    required String myUid,
+    required ChatService chats,
+  }) {
+    return SafeArea(
+      top: false,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+        decoration: BoxDecoration(
+          color: Theme.of(context).scaffoldBackgroundColor,
+          border: Border(top: BorderSide(color: Theme.of(context).dividerColor.withOpacity(0.2))),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: FilledButton.icon(
+                onPressed: (!canContact || listing.phone.trim().isEmpty) ? null : () async {
+                  final uri = Uri(scheme: 'tel', path: listing.phone);
+                  await launchUrl(uri);
+                },
+                icon: const Icon(Icons.call),
+                label: Text(status == 'approved' ? 'Позвонить' : 'Недоступно'),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: FilledButton.tonalIcon(
+                onPressed: (!canContact || listing.ownerId == myUid)
+                    ? null
+                    : () async {
+                        final chatId = await chats.getOrCreateChat(
+                          listingId: listing.id,
+                          listingTitle: listing.title,
+                          buyerId: myUid,
+                          sellerId: listing.ownerId,
+                        );
+
+                        if (!context.mounted) return;
+
+                        Navigator.of(context).push(
+                          MaterialPageRoute(builder: (_) => ChatScreen(chatId: chatId)),
+                        );
+                      },
+                icon: const Icon(Icons.chat_bubble_outline),
+                label: Text(status == 'approved' ? 'Написать' : 'Недоступно'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -252,6 +457,7 @@ $shareLink
     final favs = context.read<FavoritesService>();
     final chats = context.read<ChatService>();
     final listingsSvc = context.read<ListingsService>();
+    final presence = context.read<PresenceService>();
 
     return StreamBuilder<bool>(
       stream: _streamIsAdmin(me.uid),
@@ -270,12 +476,11 @@ $shareLink
               return Scaffold(appBar: AppBar(), body: const Center(child: Text('Объявление удалено')));
             }
 
-            // ⚠️ Тут важно: Listing должен уметь создаваться из Map.
-            // Если у тебя Listing пока только fromDoc — добавь factory Listing.fromMap(map) в модель.
             final listing = Listing.fromMap(row);
 
             final status = (row['status'] ?? 'approved').toString();
-            final rejectionReason = (row['rejection_reason'] ?? row['rejectionReason'] ?? '').toString().trim();
+            final rejectionReason =
+                (row['rejection_reason'] ?? row['rejectionReason'] ?? '').toString().trim();
 
             final isOwner = listing.ownerId == me.uid;
             final canSee = (status == 'approved') || isOwner || isAdmin;
@@ -301,6 +506,8 @@ $shareLink
                 .map((e) => _deliveryLabel(e.key))
                 .toList();
 
+            final specs = _carSpecsEntries(listing);
+
             return StreamBuilder<Set<String>>(
               stream: favs.streamFavoriteIds(me.uid),
               builder: (context, favSnap) {
@@ -310,18 +517,25 @@ $shareLink
                   stream: _streamSellerProfile(listing.ownerId),
                   builder: (context, sellerSnap) {
                     final u = sellerSnap.data ?? const <String, dynamic>{};
-                    final dn = (u['display_name'] ?? u['displayName'] ?? u['name'] ?? '').toString().trim();
-                    final sellerName = dn.isNotEmpty ? dn : listing.ownerEmail;
-
-                    final myName = (me.displayName?.trim().isNotEmpty ?? false)
-                        ? me.displayName!.trim()
-                        : (me.email ?? 'Пользователь');
+                    final sellerName = _displayNameFromUserRow(u);
+                    final sellerAvatar = _avatarUrlFromUserRow(u);
 
                     return Scaffold(
                       appBar: AppBar(
                         centerTitle: false,
                         title: Text(listing.title, maxLines: 1, overflow: TextOverflow.ellipsis),
                         actions: [
+                          IconButton(
+                            tooltip: 'Поделиться',
+                            onPressed: () => _shareAnnouncement(
+                              listing.id,
+                              listing.title,
+                              photoUrl: listing.photoUrls.isEmpty
+                                  ? null
+                                  : listing.photoUrls.first,
+                            ),
+                            icon: const Icon(Icons.share_outlined),
+                          ),
                           IconButton(
                             onPressed: () => favs.toggleFavorite(
                               uid: me.uid,
@@ -344,23 +558,9 @@ $shareLink
                                   listingId: listing.id,
                                   listingOwnerId: listing.ownerId,
                                 );
-                              } else if (v == 'share') {
-                                // ✅ ПОДЕЛИТЬСЯ
-                                await _shareAnnouncement(listing.id, listing.title);
                               }
                             },
                             itemBuilder: (ctx) => [
-                              // ✅ ПОДЕЛИТЬСЯ (видно всем)
-                              const PopupMenuItem(
-                                value: 'share',
-                                child: Row(
-                                  children: [
-                                    Icon(Icons.share_outlined, size: 18),
-                                    SizedBox(width: 8),
-                                    Text('Поделиться'),
-                                  ],
-                                ),
-                              ),
                               if (isOwner)
                                 const PopupMenuItem(
                                   value: 'edit',
@@ -387,8 +587,16 @@ $shareLink
                           ),
                         ],
                       ),
+                      bottomNavigationBar: _buildBottomActions(
+                        context: context,
+                        canContact: canContact,
+                        status: status,
+                        listing: listing,
+                        myUid: me.uid,
+                        chats: chats,
+                      ),
                       body: ListView(
-                        padding: const EdgeInsets.all(12),
+                        padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
                         children: [
                           if (status != 'approved')
                             Container(
@@ -411,7 +619,6 @@ $shareLink
                                 ],
                               ),
                             ),
-
                           if (status == 'rejected' && rejectionReason.isNotEmpty && (isOwner || isAdmin)) ...[
                             const SizedBox(height: 10),
                             Container(
@@ -427,163 +634,269 @@ $shareLink
                               ),
                             ),
                           ],
-
                           const SizedBox(height: 12),
 
                           _Photos(photoUrls: listing.photoUrls),
-                          const SizedBox(height: 12),
+                          const SizedBox(height: 14),
 
                           Text(
                             '${formatPrice(listing.price)} ₽',
-                            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
+                            style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800),
                           ),
 
-                          const SizedBox(height: 8),
-
-                          StreamBuilder<List<Map<String, dynamic>>>(
-                            stream: _streamSellerReviews(listing.ownerId),
-                            builder: (context, rSnap) {
-                              final rows = rSnap.data ?? const <Map<String, dynamic>>[];
-                              double sum = 0;
-                              int cnt = 0;
-
-                              for (final x in rows) {
-                                final r = x['rating'];
-                                if (r is num) {
-                                  sum += r.toDouble();
-                                  cnt++;
-                                }
-                              }
-
-                              final avg = (cnt == 0) ? 0.0 : (sum / cnt);
-
-                              return Row(
-                                children: [
-                                  const Icon(Icons.star, size: 18, color: Colors.amber),
-                                  const SizedBox(width: 6),
-                                  Text(avg.toStringAsFixed(1), style: const TextStyle(fontWeight: FontWeight.w700)),
-                                  const SizedBox(width: 6),
-                                  Text('($cnt)', style: TextStyle(color: Theme.of(context).colorScheme.outline)),
-                                ],
-                              );
-                            },
-                          ),
+                          if (listing.car != null) ...[
+                            const SizedBox(height: 6),
+                            Row(
+                              children: [
+                                Icon(Icons.speed_outlined, size: 18, color: Theme.of(context).colorScheme.outline),
+                                const SizedBox(width: 6),
+                                Text(
+                                  'Пробег: ${listing.car!.mileageKm} км',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    color: Theme.of(context).colorScheme.onSurface,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
 
                           const SizedBox(height: 10),
 
-                          ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            leading: Icon(Icons.rate_review_outlined, color: Theme.of(context).colorScheme.primary),
-                            title: const Text('Отзывы о продавце'),
-                            subtitle: const Text('Посмотреть и оставить отзыв'),
-                            trailing: const Icon(Icons.chevron_right),
-                            onTap: () {
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (_) => SellerReviewsScreen(
-                                    sellerId: listing.ownerId,
-                                    sellerName: sellerName,
-                                    listingId: listing.id,
+                          Container(
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(14),
+                              color: Theme.of(context).colorScheme.surface,
+                              border: Border.all(color: Theme.of(context).dividerColor.withOpacity(0.18)),
+                            ),
+                            child: Column(
+                              children: [
+                                Padding(
+                                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+                                  child: StreamBuilder<List<Map<String, dynamic>>>(
+                                    stream: _streamSellerReviews(listing.ownerId),
+                                    builder: (context, rSnap) {
+                                      final rows = rSnap.data ?? const <Map<String, dynamic>>[];
+                                      double sum = 0;
+                                      int cnt = 0;
+
+                                      for (final x in rows) {
+                                        final r = x['rating'];
+                                        if (r is num) {
+                                          sum += r.toDouble();
+                                          cnt++;
+                                        }
+                                      }
+
+                                      final avg = (cnt == 0) ? 0.0 : (sum / cnt);
+
+                                      return Row(
+                                        children: [
+                                          const Icon(Icons.star, size: 18, color: Colors.amber),
+                                          const SizedBox(width: 6),
+                                          Text(avg.toStringAsFixed(1),
+                                              style: const TextStyle(fontWeight: FontWeight.w700)),
+                                          const SizedBox(width: 6),
+                                          Text('($cnt)', style: TextStyle(color: Theme.of(context).colorScheme.outline)),
+                                        ],
+                                      );
+                                    },
                                   ),
                                 ),
-                              );
-                            },
+                                const Divider(height: 1),
+                                ListTile(
+                                  dense: true,
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+                                  leading: Icon(Icons.rate_review_outlined, color: Theme.of(context).colorScheme.primary),
+                                  title: const Text('Отзывы'),
+                                  trailing: const Icon(Icons.chevron_right),
+                                  onTap: () {
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                        builder: (_) => SellerReviewsScreen(
+                                          sellerId: listing.ownerId,
+                                          sellerName: sellerName,
+                                          listingId: listing.id,
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ],
+                            ),
                           ),
 
-                          const SizedBox(height: 6),
+                          const SizedBox(height: 12),
 
                           Text(
-                            '${listing.city.trim().isEmpty ? 'Город не указан' : listing.city} • '
-                            '${timeago.format(listing.createdAt, locale: 'ru')}',
-                            style: TextStyle(color: Theme.of(context).colorScheme.outline),
+                            listing.city.trim().isEmpty ? 'Город не указан' : listing.city,
+                            style: const TextStyle(fontWeight: FontWeight.w700),
                           ),
 
                           const SizedBox(height: 8),
-                          Text('Просмотров: ${listing.viewCount}'),
+
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(14),
+                              color: Theme.of(context).colorScheme.surface,
+                              border: Border.all(color: Theme.of(context).dividerColor.withOpacity(0.18)),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(Icons.schedule, size: 18, color: Theme.of(context).colorScheme.outline),
+                                const SizedBox(width: 6),
+                                Text(timeago.format(listing.createdAt, locale: 'ru'),
+                                    style: TextStyle(color: Theme.of(context).colorScheme.outline)),
+                                const Spacer(),
+                                Icon(Icons.remove_red_eye_outlined,
+                                    size: 18, color: Theme.of(context).colorScheme.outline),
+                                const SizedBox(width: 6),
+                                Text('${listing.viewCount}',
+                                    style: TextStyle(color: Theme.of(context).colorScheme.outline)),
+                              ],
+                            ),
+                          ),
 
                           const SizedBox(height: 10),
 
                           if (deliveryNames.isNotEmpty)
-                            Text('Доставка: ${deliveryNames.join(', ')}')
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(14),
+                                color: Theme.of(context).colorScheme.surface,
+                                border: Border.all(color: Theme.of(context).dividerColor.withOpacity(0.18)),
+                              ),
+                              child: Text('Доставка: ${deliveryNames.join(', ')}'),
+                            )
                           else
-                            Text('Доставка: не указано', style: TextStyle(color: Theme.of(context).colorScheme.outline)),
-
-                          const Divider(height: 28),
-                          Text(listing.description),
-
-                          // авто параметры
-                          if (listing.car != null) ...[
-                            const Divider(height: 28),
-                            const Text('Параметры авто', style: TextStyle(fontWeight: FontWeight.w800)),
-                            const SizedBox(height: 10),
-                            _kv('Марка', listing.car!.brand),
-                            _kv('Модель', listing.car!.model),
-                            if (listing.car!.generation.trim().isNotEmpty) _kv('Поколение', listing.car!.generation),
-                            _kv('Год', '${listing.car!.year}'),
-                            _kv('Пробег', '${listing.car!.mileageKm} км'),
-                            _kv('Кузов', listing.car!.bodyType),
-                            _kv('Топливо', listing.car!.fuel),
-                            _kv('Двигатель', '${listing.car!.engineVolume.toStringAsFixed(1)} л'),
-                            _kv('Мощность', '${listing.car!.powerHp} л.с.'),
-                            _kv('Коробка', listing.car!.transmission),
-                            _kv('Привод', listing.car!.drive),
-                            _kv('Состояние', listing.car!.condition),
-                            _kv('Цвет', listing.car!.color),
-                            if (listing.car!.owners != null) _kv('Владельцев', '${listing.car!.owners}'),
-                            if (listing.car!.isCleared != null) _kv('Растаможен', listing.car!.isCleared! ? 'Да' : 'Нет'),
-                            if ((listing.car!.vin ?? '').trim().isNotEmpty) _kv('VIN', listing.car!.vin!.trim()),
-                            if ((listing.car!.note ?? '').trim().isNotEmpty) _kv('Примечание', listing.car!.note!.trim()),
-                          ],
-
-                          const Divider(height: 28),
-
-                          Text('Продавец: $sellerName'),
-                          const SizedBox(height: 8),
-
-                          Text(listing.phoneHidden ? 'Телефон: скрыт' : 'Телефон: ${listing.phone}'),
-
-                          const SizedBox(height: 16),
-
-                          Row(
-                            children: [
-                              Expanded(
-                                child: FilledButton.icon(
-                                  onPressed: (!canContact || listing.phone.trim().isEmpty)
-                                      ? null
-                                      : () async {
-                                          final uri = Uri(scheme: 'tel', path: listing.phone);
-                                          await launchUrl(uri);
-                                        },
-                                  icon: const Icon(Icons.call),
-                                  label: Text(status == 'approved' ? 'Позвонить' : 'Недоступно'),
-                                ),
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(14),
+                                color: Theme.of(context).colorScheme.surface,
+                                border: Border.all(color: Theme.of(context).dividerColor.withOpacity(0.18)),
                               ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: FilledButton.tonalIcon(
-                                  onPressed: (!canContact || listing.ownerId == me.uid)
-                                      ? null
-                                      : () async {
-                                          final chatId = await chats.getOrCreateChat(
-                                            listingId: listing.id,
-                                            listingTitle: listing.title,
-                                            buyerId: me.uid,
-                                            buyerEmail: myName,
-                                            sellerId: listing.ownerId,
-                                            sellerEmail: sellerName,
-                                          );
+                              child: Text('Доставка: не указано',
+                                  style: TextStyle(color: Theme.of(context).colorScheme.outline)),
+                            ),
 
-                                          if (!context.mounted) return;
+                          const SizedBox(height: 12),
 
-                                          Navigator.of(context).push(
-                                            MaterialPageRoute(builder: (_) => ChatScreen(chatId: chatId)),
+                          if (specs.isNotEmpty) _buildCarSpecsSection(context, specs),
+                          if (specs.isNotEmpty) const SizedBox(height: 12),
+
+                          _buildDescriptionSection(context, listing.description),
+
+                          const SizedBox(height: 12),
+
+                          // ✅ ПРОДАВЕЦ + АВАТАР
+                          InkWell(
+                            borderRadius: BorderRadius.circular(16),
+                            onTap: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => SellerPublicProfileScreen(sellerId: listing.ownerId),
+                                ),
+                              );
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(16),
+                                color: Theme.of(context).colorScheme.surface,
+                                border: Border.all(color: Theme.of(context).dividerColor.withOpacity(0.18)),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text('Продавец',
+                                      style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+                                  const SizedBox(height: 10),
+                                  Row(
+                                    children: [
+                                      StreamBuilder<bool>(
+                                        stream: presence.streamIsOnline(listing.ownerId),
+                                        builder: (context, onlineSnap) {
+                                          final isOnline = onlineSnap.data == true;
+                                          return Stack(
+                                            clipBehavior: Clip.none,
+                                            children: [
+                                              CircleAvatar(
+                                                radius: 22,
+                                                backgroundColor: Theme.of(context)
+                                                    .colorScheme
+                                                    .surfaceContainerHighest,
+                                                backgroundImage: (sellerAvatar.isNotEmpty)
+                                                    ? NetworkImage(sellerAvatar)
+                                                    : null,
+                                                child: (sellerAvatar.isNotEmpty)
+                                                    ? null
+                                                    : Text(
+                                                        _sellerInitial(sellerName),
+                                                        style: const TextStyle(
+                                                            fontWeight: FontWeight.w900),
+                                                      ),
+                                              ),
+                                              Positioned(
+                                                right: -1,
+                                                bottom: -1,
+                                                child: Container(
+                                                  width: 12,
+                                                  height: 12,
+                                                  decoration: BoxDecoration(
+                                                    shape: BoxShape.circle,
+                                                    color: isOnline
+                                                        ? Colors.green
+                                                        : Theme.of(context)
+                                                            .colorScheme
+                                                            .outlineVariant,
+                                                    border: Border.all(
+                                                      color: Theme.of(context)
+                                                          .scaffoldBackgroundColor,
+                                                      width: 2,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
                                           );
                                         },
-                                  icon: const Icon(Icons.chat_bubble_outline),
-                                  label: Text(status == 'approved' ? 'Написать' : 'Недоступно'),
-                                ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              sellerName,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(fontWeight: FontWeight.w800),
+                                            ),
+                                            const SizedBox(height: 6),
+                                            Text(
+                                              listing.phoneHidden ? 'Телефон: скрыт' : 'Телефон: ${listing.phone}',
+                                              style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      Icon(Icons.chevron_right, color: Theme.of(context).colorScheme.outline),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 10),
+                                  Text(
+                                    'Открыть профиль продавца',
+                                    style: TextStyle(
+                                      color: Theme.of(context).colorScheme.outline,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
                               ),
-                            ],
+                            ),
                           ),
 
                           const SizedBox(height: 12),
@@ -611,7 +924,7 @@ $shareLink
 
 Widget _kv(String k, String v) {
   return Padding(
-    padding: const EdgeInsets.only(bottom: 6),
+    padding: const EdgeInsets.only(bottom: 8),
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -623,12 +936,22 @@ Widget _kv(String k, String v) {
   );
 }
 
-class _Photos extends StatelessWidget {
+class _Photos extends StatefulWidget {
   final List<String> photoUrls;
   const _Photos({required this.photoUrls});
 
   @override
+  State<_Photos> createState() => _PhotosState();
+}
+
+class _PhotosState extends State<_Photos> {
+  final PageController _controller = PageController();
+  int _page = 0;
+
+  @override
   Widget build(BuildContext context) {
+    final photoUrls = widget.photoUrls;
+
     if (photoUrls.isEmpty) {
       return Container(
         height: 260,
@@ -644,32 +967,53 @@ class _Photos extends StatelessWidget {
       borderRadius: BorderRadius.circular(16),
       child: AspectRatio(
         aspectRatio: 4 / 3,
-        child: PageView.builder(
-          itemCount: photoUrls.length,
-          itemBuilder: (_, i) => GestureDetector(
-            onTap: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => PhotoViewerScreen(photoUrls: photoUrls, initialIndex: i),
+        child: Stack(
+          children: [
+            PageView.builder(
+              controller: _controller,
+              itemCount: photoUrls.length,
+              onPageChanged: (i) => setState(() => _page = i),
+              itemBuilder: (_, i) => GestureDetector(
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => PhotoViewerScreen(photoUrls: photoUrls, initialIndex: i),
+                    ),
+                  );
+                },
+                child: CachedNetworkImage(
+                  imageUrl: photoUrls[i],
+                  fit: BoxFit.cover,
+                  alignment: Alignment.center,
+                  placeholder: (_, __) => Container(
+                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                    alignment: Alignment.center,
+                    child: const CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  errorWidget: (_, __, ___) => Container(
+                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                    alignment: Alignment.center,
+                    child: const Icon(Icons.broken_image_outlined, size: 40),
+                  ),
                 ),
-              );
-            },
-            child: CachedNetworkImage(
-              imageUrl: photoUrls[i],
-              fit: BoxFit.cover,
-              alignment: Alignment.center,
-              placeholder: (_, __) => Container(
-                color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                alignment: Alignment.center,
-                child: const CircularProgressIndicator(strokeWidth: 2),
-              ),
-              errorWidget: (_, __, ___) => Container(
-                color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                alignment: Alignment.center,
-                child: const Icon(Icons.broken_image_outlined, size: 40),
               ),
             ),
-          ),
+            Positioned(
+              right: 10,
+              bottom: 10,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.55),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  '${_page + 1}/${photoUrls.length}',
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );

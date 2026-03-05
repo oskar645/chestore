@@ -1,5 +1,5 @@
 import 'package:chestore2/src/data/auto_catalog.dart';
-import 'package:chestore2/src/data/russia_locations.dart';
+
 import 'package:chestore2/src/features/listings/pick_location_screen.dart';
 import 'package:chestore2/src/models/car_specs.dart';
 import 'package:chestore2/src/models/listing.dart';
@@ -308,7 +308,12 @@ class _EditListingScreenState extends State<EditListingScreen> {
           builder: (ctx, setM) {
             List<String> currentItems() {
               if (step == 0) return kAutoBrandsPopular;
-              if (step == 1) return (brand == null) ? const [] : (kAutoModels[brand!] ?? const []);
+              if (step == 1) {
+                if (brand == null) return const [];
+                final models = kAutoModels[brand!];
+                if (models == null || models.isEmpty) return const ['Другая модель'];
+                return models;
+              }
               final key = '${brand ?? ''}|${model ?? ''}';
               final gens = kAutoGenerations[key] ?? const [];
               return gens.isEmpty ? const ['Не указывать'] : ['Не указывать', ...gens];

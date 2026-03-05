@@ -1,4 +1,4 @@
-// lib/src/features/listings/add_listing_screen.dart
+﻿// lib/src/features/listings/add_listing_screen.dart
 import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 
@@ -15,6 +15,7 @@ import 'package:geocoding/geocoding.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart' as latlng;
 import 'package:provider/provider.dart';
+import 'package:chestore2/src/widgets/yandex_address_field.dart';
 
 class AddListingScreen extends StatefulWidget {
   const AddListingScreen({super.key});
@@ -676,10 +677,14 @@ class _AddListingScreenState extends State<AddListingScreen> {
           builder: (ctx, setM) {
             List<String> currentItems() {
               if (step == 0) return kAutoBrandsPopular;
-              if (step == 1)
-                return (brand == null)
-                    ? const []
-                    : (kAutoModels[brand!] ?? const []);
+              if (step == 1) {
+                if (brand == null) return const [];
+                final models = kAutoModels[brand!];
+                if (models == null || models.isEmpty) {
+                  return const ['Другая модель'];
+                }
+                return models;
+              }
               final key = '${brand ?? ''}|${model ?? ''}';
               final gens = kAutoGenerations[key] ?? const [];
               return gens.isEmpty
@@ -1301,32 +1306,19 @@ class _AddListingScreenState extends State<AddListingScreen> {
 
           const SizedBox(height: 12),
 
-          Row(
-            children: [
-              Expanded(
-                child: _selectTile(
-                  title: 'Город / регион / село (выбрать)',
-                  value: _city.text.trim(),
-                  onTap: _openCityPickerOneWindow,
-                  leading: const Icon(Icons.location_city_outlined),
-                ),
-              ),
-              const SizedBox(width: 8),
-              InkWell(
-                onTap: _openMap,
-                borderRadius: BorderRadius.circular(12),
-                child: Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(12),
-                    color: Theme.of(context).colorScheme.primaryContainer,
-                  ),
-                  alignment: Alignment.center,
-                  child: const Icon(Icons.map_outlined, color: Colors.green),
-                ),
-              ),
-            ],
+          YandexAddressField(
+            controller: _city,
+            label: 'Город / адрес (Яндекс)',
+            onSelected: (_) => setState(() => _pickedLatLng = null),
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerRight,
+            child: OutlinedButton.icon(
+              onPressed: _openMap,
+              icon: const Icon(Icons.map_outlined),
+              label: const Text('Выбрать на карте'),
+            ),
           ),
 
           // ✅ БЛОК “ПАРАМЕТРЫ АВТО”

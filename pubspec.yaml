@@ -4,7 +4,7 @@ publish_to: 'none'
 version: 0.1.0+1
 
 environment:
-  sdk: ^3.10.0
+  sdk: ">=3.3.0 <4.0.0"
 
 dependencies:
   flutter:
@@ -34,7 +34,8 @@ dependencies:
   # Network
   url_launcher: ^6.3.0
   dio: ^5.9.1
-  share_plus: ^12.0.1  # ✅ Совместимая версия
+  share_plus: ^12.0.1
+  http: ^1.2.0   # ✅ ДОБАВИЛИ
 
 dev_dependencies:
   flutter_test:

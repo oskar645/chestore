@@ -24,18 +24,26 @@ class FavoritesService {
     required String listingId,
     required bool makeFavorite,
   }) async {
-    if (makeFavorite) {
-      await _client.from('favorites').upsert({
-        'user_id': uid,
-        'listing_id': listingId,
-        'created_at': DateTime.now().toUtc(),
-      });
-    } else {
-      await _client
-          .from('favorites')
-          .delete()
-          .eq('user_id', uid)
-          .eq('listing_id', listingId);
+    try {
+      if (makeFavorite) {
+        await _client.from('favorites').upsert(
+          {
+            'user_id': uid,
+            'listing_id': listingId,
+            'created_at': DateTime.now().toUtc().toIso8601String(),
+          },
+          onConflict: 'user_id,listing_id',
+        );
+      } else {
+        await _client
+            .from('favorites')
+            .delete()
+            .eq('user_id', uid)
+            .eq('listing_id', listingId);
+      }
+    } catch (e) {
+      print('Ошибка при изменении избранного: $e');
+      rethrow;
     }
   }
 }

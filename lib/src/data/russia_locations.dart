@@ -1,4 +1,4 @@
-// lib/src/data/russia_locations.dart
+﻿// lib/src/data/russia_locations.dart
 
 /// ✅ Федеральные субъекты РФ (список)
 const kRussiaRegions = <String>[

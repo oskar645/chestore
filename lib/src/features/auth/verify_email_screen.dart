@@ -21,65 +21,99 @@ class VerifyEmailScreen extends StatefulWidget {
 }
 
 class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
+  final _codeCtrl = TextEditingController();
+
   bool _sending = false;
-  bool _checking = false;
+  bool _verifying = false;
 
   SupabaseClient get _sb => Supabase.instance.client;
+
+  @override
+  void dispose() {
+    _codeCtrl.dispose();
+    super.dispose();
+  }
+
+  void _snack(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
 
   Future<void> _resend() async {
     setState(() => _sending = true);
     try {
+      // Отправит письмо повторно (и код тоже, если шаблон содержит {{ .Token }})
       await _sb.auth.resend(type: OtpType.signup, email: widget.email);
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Письмо отправлено ещё раз')),
-      );
+      _snack('Письмо отправлено ещё раз');
     } on AuthException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message)),
-      );
+      _snack(e.message);
+    } catch (e) {
+      _snack('Ошибка: $e');
     } finally {
       if (mounted) setState(() => _sending = false);
     }
   }
 
-  Future<void> _checkAndLogin() async {
-    setState(() => _checking = true);
+  Future<void> _verifyCodeAndLogin() async {
+    final code = _codeCtrl.text.trim();
+
+    if (code.isEmpty) {
+      _snack('Введите код из письма');
+      return;
+    }
+
+    setState(() => _verifying = true);
+
     try {
-      final authRes = await _sb.auth.signInWithPassword(
+      // 1) Подтверждаем signup кодом
+      final verifyRes = await _sb.auth.verifyOTP(
+        type: OtpType.signup,
         email: widget.email,
-        password: widget.password,
+        token: code,
       );
 
-      if (authRes.session == null || authRes.user == null) {
-        throw const AuthException('Не удалось войти');
+      // Иногда session может прийти сразу, иногда нет — подстрахуемся входом
+      final session = verifyRes.session ?? _sb.auth.currentSession;
+      User? user = verifyRes.user ?? _sb.auth.currentUser;
+
+      if (session == null || user == null) {
+        // 2) Если сессии нет — пробуем обычный вход паролем
+        final authRes = await _sb.auth.signInWithPassword(
+          email: widget.email,
+          password: widget.password,
+        );
+
+        if (authRes.session == null || authRes.user == null) {
+          throw const AuthException('Не удалось войти после подтверждения');
+        }
+
+        user = authRes.user!;
       }
 
-      final userId = authRes.user!.id;
+      final userId = user.id;
 
-      // ✅ Сохраняем имя и телефон в таблицу users
+      // ✅ НЕ ТРОГАЕМ твою структуру: сохраняем name/phone в public.users
       if (widget.name != null || widget.phone != null) {
         final profile = ProfileService();
         await profile.updateProfile(userId, {
           if (widget.name != null) 'display_name': widget.name,
           if (widget.name != null) 'name': widget.name,
           if (widget.phone != null) 'phone': widget.phone,
+          // если у тебя в users есть email-колонка, можно сохранять и её:
+          // 'email': widget.email,
         });
       }
 
       if (!mounted) return;
 
-      // Теперь AuthGate увидит session и пустит в MainShell
+      // AuthGate увидит session и пустит в MainShell
       Navigator.of(context).pop();
     } on AuthException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Ещё не подтверждено: ${e.message}')),
-      );
+      _snack('Код неверный или устарел: ${e.message}');
+    } catch (e) {
+      _snack('Ошибка: $e');
     } finally {
-      if (mounted) setState(() => _checking = false);
+      if (mounted) setState(() => _verifying = false);
     }
   }
 
@@ -92,21 +126,34 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Мы отправили письмо для подтверждения на:\n${widget.email}'),
+            Text('Мы отправили письмо с кодом на:\n${widget.email}'),
             const SizedBox(height: 12),
-            const Text('Открой письмо и нажми "Confirm".'),
-            const SizedBox(height: 24),
+            const Text('Открой письмо, скопируй код и введи его ниже.'),
+            const SizedBox(height: 16),
+
+            TextField(
+              controller: _codeCtrl,
+              keyboardType: TextInputType.number,
+              textInputAction: TextInputAction.done,
+              decoration: const InputDecoration(
+                labelText: 'Код из письма',
+                hintText: 'Например: 123456',
+              ),
+              onSubmitted: (_) => _verifying ? null : _verifyCodeAndLogin(),
+            ),
+
+            const SizedBox(height: 16),
 
             FilledButton(
-              onPressed: _sending ? null : _resend,
-              child: Text(_sending ? 'Отправляем...' : 'Отправить письмо ещё раз'),
+              onPressed: _verifying ? null : _verifyCodeAndLogin,
+              child: Text(_verifying ? 'Проверяем...' : 'Подтвердить'),
             ),
 
             const SizedBox(height: 12),
 
             FilledButton.tonal(
-              onPressed: _checking ? null : _checkAndLogin,
-              child: Text(_checking ? 'Проверяем...' : 'Я подтвердил — войти'),
+              onPressed: _sending ? null : _resend,
+              child: Text(_sending ? 'Отправляем...' : 'Отправить код ещё раз'),
             ),
           ],
         ),

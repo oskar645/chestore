@@ -1,4 +1,3 @@
-
 // lib/src/models/chat.dart
 class Chat {
   final String id;
@@ -6,90 +5,70 @@ class Chat {
   final String listingId;
   final String listingTitle;
 
-  final List<String> memberIds; // uuid[]
-  final Map<String, String> memberEmails; // jsonb {uid: email/name}
+  final String buyerId;
+  final String sellerId;
 
   final String lastMessage;
-  final DateTime updatedAt; // timestamptz
+  final DateTime updatedAt;
 
-  final Map<String, int> unread; // jsonb {uid: count}
+  final int unreadForBuyer;
+  final int unreadForSeller;
 
   Chat({
     required this.id,
     required this.listingId,
     required this.listingTitle,
-    required this.memberIds,
-    required this.memberEmails,
+    required this.buyerId,
+    required this.sellerId,
     required this.lastMessage,
     required this.updatedAt,
-    required this.unread,
+    required this.unreadForBuyer,
+    required this.unreadForSeller,
   });
 
-  int unreadFor(String uid) => unread[uid] ?? 0;
+  String otherUserId(String myUid) {
+    if (myUid == buyerId) return sellerId;
+    return buyerId;
+  }
 
-  // ===============================
-  // SUPABASE: row -> Chat
-  // ===============================
+  int unreadFor(String myUid) {
+    if (myUid == buyerId) return unreadForBuyer;
+    if (myUid == sellerId) return unreadForSeller;
+    return 0;
+  }
+
+  static DateTime _parseDt(dynamic v) {
+    if (v == null) return DateTime.now();
+    if (v is DateTime) return v;
+    if (v is String) return DateTime.tryParse(v) ?? DateTime.now();
+    return DateTime.now();
+  }
+
   factory Chat.fromMap(Map<String, dynamic> row) {
-    DateTime parseDt(dynamic v) {
-      if (v == null) return DateTime.now();
-      if (v is DateTime) return v;
-      if (v is String) return DateTime.tryParse(v) ?? DateTime.now();
-      return DateTime.now();
-    }
-
-    List<String> parseUuidArray(dynamic v) {
-      if (v == null) return <String>[];
-      if (v is List) return v.map((e) => e.toString()).toList();
-      return <String>[];
-    }
-
-    Map<String, String> parseEmails(dynamic v) {
-      final out = <String, String>{};
-      if (v is Map) {
-        v.forEach((k, val) {
-          out[k.toString()] = (val ?? '').toString();
-        });
-      }
-      return out;
-    }
-
-    Map<String, int> parseUnread(dynamic v) {
-      final out = <String, int>{};
-      if (v is Map) {
-        v.forEach((k, val) {
-          if (val is num) out[k.toString()] = val.toInt();
-          if (val is String) out[k.toString()] = int.tryParse(val) ?? 0;
-        });
-      }
-      return out;
-    }
-
     return Chat(
-      id: row['id']?.toString() ?? '',
+      id: (row['id'] ?? '').toString(),
       listingId: (row['listing_id'] ?? '').toString(),
       listingTitle: (row['listing_title'] ?? '').toString(),
-      memberIds: parseUuidArray(row['member_ids']),
-      memberEmails: parseEmails(row['member_emails']),
+      buyerId: (row['buyer_id'] ?? '').toString(),
+      sellerId: (row['seller_id'] ?? '').toString(),
       lastMessage: (row['last_message'] ?? '').toString(),
-      updatedAt: parseDt(row['updated_at']),
-      unread: parseUnread(row['unread']),
+      updatedAt: _parseDt(row['updated_at']),
+      unreadForBuyer: (row['unread_for_buyer'] as num?)?.toInt() ?? 0,
+      unreadForSeller: (row['unread_for_seller'] as num?)?.toInt() ?? 0,
     );
   }
 
-  // ===============================
-  // Chat -> map (для insert/update)
-  // ===============================
   Map<String, dynamic> toMap() {
     return {
       'id': id,
       'listing_id': listingId,
       'listing_title': listingTitle,
-      'member_ids': memberIds,
-      'member_emails': memberEmails,
+      'buyer_id': buyerId,
+      'seller_id': sellerId,
       'last_message': lastMessage,
-      'unread': unread,
-      'updated_at': updatedAt.toIso8601String(),
+      'updated_at': updatedAt.toUtc().toIso8601String(),
+      'unread_for_buyer': unreadForBuyer,
+      'unread_for_seller': unreadForSeller,
     };
   }
 }

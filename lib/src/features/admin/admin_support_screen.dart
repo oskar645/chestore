@@ -1,3 +1,4 @@
+// lib/src/features/admin/admin_support_screen.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:chestore2/src/services/support_service.dart';
@@ -12,11 +13,14 @@ class AdminSupportTab extends StatelessWidget {
     return StreamBuilder<List<Map<String, dynamic>>>(
       stream: support.streamTicketsForAdmin(),
       builder: (context, snap) {
-        if (!snap.hasData) {
+        if (snap.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
         }
+        if (snap.hasError) {
+          return Center(child: Text('Ошибка: ${snap.error}'));
+        }
 
-        final docs = snap.data!;
+        final docs = snap.data ?? [];
         if (docs.isEmpty) {
           return const Center(child: Text('Пока нет обращений'));
         }
@@ -29,28 +33,26 @@ class AdminSupportTab extends StatelessWidget {
             final data = docs[i];
 
             final uid = (data['uid'] ?? '').toString();
-            final name =
-                (data['name'] ?? 'Пользователь').toString();
-            final last =
-                (data['last_message'] ?? '').toString();
-
-            final unreadNum =
-                (data['unread_for_admin'] == true) ? 1 : 0;
+            final name = (data['name'] ?? 'Пользователь').toString();
+            final last = (data['last_message'] ?? '').toString();
+            final unreadForAdmin = data['unread_for_admin'] == true;
 
             return ListTile(
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(14),
               ),
-              tileColor: Theme.of(context)
-                  .colorScheme
-                  .surfaceContainerHighest,
+              tileColor: Theme.of(context).colorScheme.surfaceContainerHighest,
               leading: Icon(
                 Icons.support_agent,
-                color: unreadNum > 0
+                color: unreadForAdmin
                     ? Colors.red
                     : Theme.of(context).colorScheme.primary,
               ),
-              title: Text(name),
+              title: Text(
+                name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
               subtitle: Text(
                 last.isEmpty ? 'Нет сообщений' : last,
                 maxLines: 1,
@@ -79,7 +81,7 @@ class AdminSupportTab extends StatelessWidget {
 class AdminTicketScreen extends StatefulWidget {
   final String ticketId;
   final String titleName;
-  final String userUid;
+  final String userUid; // можно убрать, если не используешь
 
   const AdminTicketScreen({
     super.key,
@@ -89,21 +91,54 @@ class AdminTicketScreen extends StatefulWidget {
   });
 
   @override
-  State<AdminTicketScreen> createState() =>
-      _AdminTicketScreenState();
+  State<AdminTicketScreen> createState() => _AdminTicketScreenState();
 }
 
-class _AdminTicketScreenState
-    extends State<AdminTicketScreen> {
-  final _text = TextEditingController();
+class _AdminTicketScreenState extends State<AdminTicketScreen> {
+  final TextEditingController _text = TextEditingController();
   bool _sending = false;
+
+  /// 4 быстрых кнопки: короткие названия + длинный текст (вставляем в поле)
+  final List<Map<String, String>> _quickReplies = const [
+    {
+      'label': 'Приветствие',
+      'text':
+          'Здравствуйте! 👋 Спасибо за обращение в поддержку. Мы получили ваше сообщение и уже начали разбираться. '
+              'Пожалуйста, подождите немного — мы ответим вам здесь, как только появится информация.',
+    },
+    {
+      'label': 'На проверке',
+      'text':
+          'Мы передали ваш вопрос на проверку и уточнение. ✅ '
+              'Обычно это занимает немного времени. Если понадобятся детали — мы обязательно напишем вам в этом чате.',
+    },
+    {
+      'label': 'Нужны детали',
+      'text':
+          'Чтобы быстрее помочь, уточните, пожалуйста:\n'
+              '1) что именно не работает/что произошло,\n'
+              '2) на каком устройстве (Android/iPhone),\n'
+              '3) можно ли скриншот.\n'
+              'После этого мы сразу продолжим проверку.',
+    },
+    {
+      'label': 'Решено',
+      'text':
+          'Готово ✅ Мы исправили/проверили ситуацию. Пожалуйста, попробуйте ещё раз. '
+              'Если проблема повторится — напишите нам сюда, мы сразу продолжим.',
+    },
+  ];
 
   @override
   void initState() {
     super.initState();
+
+    // Помечаем как прочитанный админом при открытии
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final support = context.read<SupportService>();
-      await support.markReadByAdmin(widget.ticketId);
+      try {
+        await support.markReadByAdmin(widget.ticketId);
+      } catch (_) {}
     });
   }
 
@@ -126,9 +161,42 @@ class _AdminTicketScreenState
         text: t,
       );
       _text.clear();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Ошибка отправки: $e')),
+      );
     } finally {
       if (mounted) setState(() => _sending = false);
     }
+  }
+
+  void _applyQuickReply(String value) {
+    _text.text = value;
+    _text.selection = TextSelection.fromPosition(
+      TextPosition(offset: _text.text.length),
+    );
+    setState(() {});
+  }
+
+  Widget _buildQuickReplies() {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: _quickReplies.map((q) {
+          final label = q['label'] ?? 'Ответ';
+          final text = q['text'] ?? '';
+
+          return Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: OutlinedButton(
+              onPressed: _sending ? null : () => _applyQuickReply(text),
+              child: Text(label),
+            ),
+          );
+        }).toList(),
+      ),
+    );
   }
 
   @override
@@ -143,15 +211,16 @@ class _AdminTicketScreenState
             child: StreamBuilder<List<Map<String, dynamic>>>(
               stream: support.streamMessages(widget.ticketId),
               builder: (context, snap) {
-                if (!snap.hasData) {
-                  return const Center(
-                      child: CircularProgressIndicator());
+                if (snap.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (snap.hasError) {
+                  return Center(child: Text('Ошибка: ${snap.error}'));
                 }
 
-                final items = snap.data!;
+                final items = snap.data ?? [];
                 if (items.isEmpty) {
-                  return const Center(
-                      child: Text('Нет сообщений'));
+                  return const Center(child: Text('Нет сообщений'));
                 }
 
                 return ListView.builder(
@@ -160,11 +229,8 @@ class _AdminTicketScreenState
                   itemCount: items.length,
                   itemBuilder: (_, i) {
                     final m = items[i];
-                    final sender =
-                        (m['sender'] ?? '').toString();
-                    final text =
-                        (m['text'] ?? '').toString();
-
+                    final sender = (m['sender'] ?? '').toString();
+                    final text = (m['text'] ?? '').toString();
                     final isAdmin = sender == 'admin';
 
                     return Align(
@@ -172,19 +238,16 @@ class _AdminTicketScreenState
                           ? Alignment.centerRight
                           : Alignment.centerLeft,
                       child: Container(
-                        margin: const EdgeInsets.symmetric(
-                            vertical: 4),
+                        margin: const EdgeInsets.symmetric(vertical: 4),
                         padding: const EdgeInsets.all(10),
+                        constraints: const BoxConstraints(maxWidth: 320),
                         decoration: BoxDecoration(
                           color: isAdmin
-                              ? Theme.of(context)
-                                  .colorScheme
-                                  .primaryContainer
+                              ? Theme.of(context).colorScheme.primaryContainer
                               : Theme.of(context)
                                   .colorScheme
                                   .surfaceContainerHighest,
-                          borderRadius:
-                              BorderRadius.circular(14),
+                          borderRadius: BorderRadius.circular(14),
                         ),
                         child: Text(text),
                       ),
@@ -194,23 +257,43 @@ class _AdminTicketScreenState
               },
             ),
           ),
+
+          // ===== БЫСТРЫЕ ОТВЕТЫ =====
           SafeArea(
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _text,
-                    decoration: const InputDecoration(
-                      hintText: 'Ответ...',
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+              child: _buildQuickReplies(),
+            ),
+          ),
+
+          // ===== ПОЛЕ ВВОДА + ОТПРАВКА =====
+          SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _text,
+                      decoration: const InputDecoration(
+                        hintText: 'Ответ...',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      minLines: 1,
+                      maxLines: 4,
+                      onSubmitted: (_) => _sending ? null : _send(_text.text),
                     ),
                   ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.send),
-                  onPressed:
-                      _sending ? null : () => _send(_text.text),
-                ),
-              ],
+                  const SizedBox(width: 8),
+                  IconButton(
+                    icon: const Icon(Icons.send),
+                    onPressed: _sending ? null : () => _send(_text.text),
+                  ),
+                ],
+              ),
             ),
           ),
         ],
