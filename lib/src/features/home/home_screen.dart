@@ -523,7 +523,10 @@ class _FiltersScreenState extends State<_FiltersScreen> {
   static const List<String> _carConditions = <String>[
     'Отличное',
     'Хорошее',
+    'Среднее',
     'Требует ремонта',
+    'Небитый',
+    'Битый',
     'После ДТП',
     'Не битый',
   ];

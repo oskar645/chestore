@@ -94,7 +94,12 @@ class _EditListingScreenState extends State<EditListingScreen> {
   ];
 
   static const _conditions = <String>[
-    'Отличное','Хорошее','Среднее','Требует ремонта',
+    'Отличное',
+    'Хорошее',
+    'Среднее',
+    'Требует ремонта',
+    'Небитый',
+    'Битый',
   ];
 
   static const _colors = <String>[

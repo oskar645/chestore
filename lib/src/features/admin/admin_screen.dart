@@ -461,6 +461,40 @@ class AdminListingReviewScreen extends StatefulWidget {
 
 class _AdminListingReviewScreenState extends State<AdminListingReviewScreen> {
   bool _busy = false;
+  static const List<_ModerationRejectReason> _rejectReasons = [
+    _ModerationRejectReason(
+      label: 'Мат / оскорбления',
+      rejectionReason: 'Нецензурная лексика или оскорбления в тексте объявления.',
+      notificationBody:
+          'Ваше объявление отклонено: в тексте обнаружены мат или оскорбления.',
+    ),
+    _ModerationRejectReason(
+      label: 'Спам / дубликат',
+      rejectionReason: 'Спам или дублирующее объявление.',
+      notificationBody:
+          'Ваше объявление отклонено: обнаружен спам или дублирующая публикация.',
+    ),
+    _ModerationRejectReason(
+      label: 'Фейк / обман',
+      rejectionReason: 'Недостоверная информация (фейк/обман).',
+      notificationBody:
+          'Ваше объявление отклонено: информация в объявлении не подтверждается и выглядит недостоверной.',
+    ),
+    _ModerationRejectReason(
+      label: 'Не по теме сайта',
+      rejectionReason:
+          'Товар или услуга не подходит для размещения на площадке CheStore.',
+      notificationBody:
+          'Ваше объявление отклонено: эта категория товара/услуги не размещается на CheStore.',
+    ),
+    _ModerationRejectReason(
+      label: 'Запрещённый товар',
+      rejectionReason: 'Запрещённый к продаже товар.',
+      notificationBody:
+          'Ваше объявление отклонено: товар запрещён к размещению правилами CheStore.',
+    ),
+  ];
+
   static const List<_ModerationDeleteReason> _deleteReasons = [
     _ModerationDeleteReason(
       label: 'Запрещенный товар',
@@ -501,55 +535,85 @@ class _AdminListingReviewScreenState extends State<AdminListingReviewScreen> {
   }
 
   Future<void> _reject() async {
-    final reason = await _askReason();
-    if (reason == null) return;
+    final notifications = context.read<NotificationsService>();
+    final selected = await _askRejectReason();
+    if (selected == null) return;
 
     setState(() => _busy = true);
     try {
       await Supabase.instance.client.from('listings').update({
         'status': 'rejected',
-        'rejection_reason': reason,
+        'rejection_reason': selected.rejectionReason,
       }).eq('id', widget.listingId);
 
-      if (mounted) Navigator.pop(context);
+      String? notifyError;
+      final ownerId = (widget.listingData['owner_id'] ?? '').toString();
+      if (ownerId.trim().isNotEmpty) {
+        try {
+          await notifications.sendPersonal(
+            userId: ownerId,
+            title: '❌ Объявление отклонено',
+            body: selected.notificationBody,
+          );
+        } catch (e) {
+          notifyError = e.toString();
+        }
+      }
+
+      if (!mounted) return;
+      if (notifyError == null) {
+        showAppSnack(context, 'Объявление отклонено, уведомление отправлено');
+      } else {
+        showAppSnack(
+          context,
+          'Объявление отклонено, но уведомление не отправлено: $notifyError',
+          isError: true,
+        );
+      }
+      Navigator.pop(context);
     } catch (e) {
-      debugPrint('Ошибка отклонения: $e');
+      if (!mounted) return;
+      showAppSnack(context, 'Ошибка отклонения: $e', isError: true);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
-  Future<String?> _askReason() async {
-    final c = TextEditingController();
-    final res = await showDialog<String?>(
+  Future<_ModerationRejectReason?> _askRejectReason() async {
+    var selected = 0;
+    return showDialog<_ModerationRejectReason>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Причина отклонения'),
-        content: TextField(
-          controller: c,
-          decoration: const InputDecoration(
-            hintText: 'Например: запрещённый товар / мат / спам / фейк',
-            border: OutlineInputBorder(),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          title: const Text('Причина отклонения'),
+          content: SizedBox(
+            width: 420,
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (int i = 0; i < _rejectReasons.length; i++)
+                  ChoiceChip(
+                    label: Text(_rejectReasons[i].label),
+                    selected: selected == i,
+                    onSelected: (_) => setState(() => selected = i),
+                  ),
+              ],
+            ),
           ),
-          minLines: 2,
-          maxLines: 4,
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Отмена'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, _rejectReasons[selected]),
+              child: const Text('Отклонить и уведомить'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Отмена'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, c.text.trim()),
-            child: const Text('Ок'),
-          ),
-        ],
       ),
     );
-
-    final t = (res ?? '').trim();
-    if (t.isEmpty) return null;
-    return t;
   }
 
   Future<void> _delete() async {
@@ -765,6 +829,17 @@ class _ModerationDeleteReason {
   const _ModerationDeleteReason({
     required this.label,
     required this.message,
+  });
+}
+
+class _ModerationRejectReason {
+  final String label;
+  final String rejectionReason;
+  final String notificationBody;
+  const _ModerationRejectReason({
+    required this.label,
+    required this.rejectionReason,
+    required this.notificationBody,
   });
 }
 
