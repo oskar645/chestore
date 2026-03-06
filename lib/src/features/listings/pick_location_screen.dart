@@ -1,17 +1,12 @@
-// lib/src/features/listings/pick_location_screen.dart
 import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
-import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
 import 'package:chestore2/src/services/yandex_suggest_service.dart';
 
-/// Этот экран ВОЗВРАЩАЕТ просто String:
-/// Navigator.push<String>(..., MaterialPageRoute(builder: (_) => const PickLocationScreen()))
-/// и потом в add_listing_screen.dart ты делаешь:
-/// if (res != null) _city.text = res;
 class PickLocationScreen extends StatefulWidget {
   const PickLocationScreen({super.key});
 
@@ -21,19 +16,15 @@ class PickLocationScreen extends StatefulWidget {
 
 class _PickLocationScreenState extends State<PickLocationScreen> {
   final _yandex = YandexSuggestService();
-
-// 0 = Поиск, 1 = Карта
-  int _tab = 0;
-
-// —-— поиск —---
   final TextEditingController _qCtrl = TextEditingController();
+
+  int _tab = 0;
   Timer? _debounce;
   bool _loadingSuggest = false;
   String? _suggestError;
   List<String> _suggestions = const [];
 
-// —-— карта —---
-  LatLng _picked = const LatLng(55.751244, 37.618423); // Москва по умолчанию
+  LatLng _picked = const LatLng(55.751244, 37.618423);
   bool _loadingGeo = true;
 
   @override
@@ -66,7 +57,7 @@ class _PickLocationScreenState extends State<PickLocationScreen> {
         _picked = LatLng(pos.latitude, pos.longitude);
       }
     } catch (_) {
-// если что-то пошло не так — остаётся Москва
+      // Keep the default point if location lookup fails.
     } finally {
       if (mounted) setState(() => _loadingGeo = false);
     }
@@ -74,7 +65,6 @@ class _PickLocationScreenState extends State<PickLocationScreen> {
 
   void _onQueryChanged() {
     final text = _qCtrl.text.trim();
-// простой debounce, чтобы не долбить Яндекс каждую букву
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 350), () {
       _loadYandexSuggestions(text);
@@ -116,102 +106,80 @@ class _PickLocationScreenState extends State<PickLocationScreen> {
     }
   }
 
-// красивый текст по точке (для карты)
-  Future<String> _labelFromLatLng(LatLng p) async {
-    try {
-      final placemarks =
-          await placemarkFromCoordinates(p.latitude, p.longitude);
-      if (placemarks.isEmpty) return 'Выбранная точка';
-
-      final pm = placemarks.first;
-
-      final parts = <String>[
-        if ((pm.locality ?? '').trim().isNotEmpty) pm.locality!.trim(),
-        if ((pm.subLocality ?? '').trim().isNotEmpty) pm.subLocality!.trim(),
-        if ((pm.administrativeArea ?? '').trim().isNotEmpty)
-          pm.administrativeArea!.trim(),
-      ];
-
-      final text = parts.where((e) => e.isNotEmpty).join(', ');
-      return text.isEmpty ? 'Выбранная точка' : text;
-    } catch (_) {
-      return 'Выбранная точка';
-    }
-  }
-
-// Выбор подсказки → просто закрываем экран и возвращаем строку
   void _onSuggestionTap(String value) {
     final label = value.trim();
     if (label.isEmpty) return;
-    Navigator.of(context).pop(label);
+    Navigator.of(context).maybePop(label);
   }
 
-// Выбор точки на карте → делаем подпись и возвращаем строку
   Future<void> _onMapChoose() async {
-    final label = await _labelFromLatLng(_picked);
     if (!mounted) return;
-    Navigator.of(context).pop(label);
+    Navigator.of(context).maybePop(_picked);
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Место'),
-        actions: [
-// "Готово" работает только на вкладке "Карта"
-          TextButton(
-            onPressed: _tab == 1 ? _onMapChoose : null,
-            child: const Text('Готово'),
+    return PopScope(
+      canPop: true,
+      child: Scaffold(
+        appBar: AppBar(
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () => Navigator.of(context).maybePop(),
           ),
-        ],
-      ),
-      body: _loadingGeo
-          ? const Center(child: CircularProgressIndicator())
-          : Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
-                  child: SegmentedButton<int>(
-                    segments: const [
-                      ButtonSegment(
-                        value: 0,
-                        label: Text('Поиск'),
-                        icon: Icon(Icons.search),
-                      ),
-                      ButtonSegment(
-                        value: 1,
-                        label: Text('Карта'),
-                        icon: Icon(Icons.map_outlined),
-                      ),
-                    ],
-                    selected: {_tab},
-                    onSelectionChanged: (s) => setState(() => _tab = s.first),
+          title: const Text('Место'),
+          actions: [
+            TextButton(
+              onPressed: _tab == 1 ? _onMapChoose : null,
+              child: const Text('Готово'),
+            ),
+          ],
+        ),
+        body: _loadingGeo
+            ? const Center(child: CircularProgressIndicator())
+            : Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+                    child: SegmentedButton<int>(
+                      segments: const [
+                        ButtonSegment(
+                          value: 0,
+                          label: Text('Поиск'),
+                          icon: Icon(Icons.search),
+                        ),
+                        ButtonSegment(
+                          value: 1,
+                          label: Text('Карта'),
+                          icon: Icon(Icons.map_outlined),
+                        ),
+                      ],
+                      selected: {_tab},
+                      onSelectionChanged: (s) => setState(() => _tab = s.first),
+                    ),
+                  ),
+                  Expanded(
+                    child: _tab == 0 ? _buildSearch(context) : _buildMap(context),
+                  ),
+                ],
+              ),
+        bottomNavigationBar: _tab == 1
+            ? SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: FilledButton.icon(
+                    onPressed: _onMapChoose,
+                    icon: const Icon(Icons.check),
+                    label: const Text('Выбрать это место'),
                   ),
                 ),
-                Expanded(
-                  child: _tab == 0 ? _buildSearch(context) : _buildMap(context),
-                ),
-              ],
-            ),
-// нижняя кнопка нужна только для карты – при поиске убираем, чтобы не путать
-      bottomNavigationBar: _tab == 1
-          ? SafeArea(
-              top: false,
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: FilledButton.icon(
-                  onPressed: _onMapChoose,
-                  icon: const Icon(Icons.check),
-                  label: const Text('Выбрать это место'),
-                ),
-              ),
-            )
-          : null,
+              )
+            : null,
+      ),
     );
   }
 
-// —------— вкладка "Поиск" —--------
   Widget _buildSearch(BuildContext context) {
     return Column(
       children: [
@@ -221,7 +189,7 @@ class _PickLocationScreenState extends State<PickLocationScreen> {
             controller: _qCtrl,
             decoration: InputDecoration(
               prefixIcon: const Icon(Icons.search),
-              hintText: 'Начните писать: Грозный, Москва, Шуани…',
+              hintText: 'Начните писать: Грозный, Москва, Шонни…',
               isDense: true,
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(16),
@@ -265,15 +233,15 @@ class _PickLocationScreenState extends State<PickLocationScreen> {
                       itemCount: _suggestions.length,
                       separatorBuilder: (_, __) => const Divider(height: 1),
                       itemBuilder: (_, i) {
-                        final v = _suggestions[i];
+                        final value = _suggestions[i];
                         return ListTile(
                           leading: const Icon(Icons.place_outlined),
                           title: Text(
-                            v,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
+                            value,
+                            maxLines: 3,
+                            overflow: TextOverflow.fade,
                           ),
-                          onTap: () => _onSuggestionTap(v),
+                          onTap: () => _onSuggestionTap(value),
                         );
                       },
                     )),
@@ -282,7 +250,6 @@ class _PickLocationScreenState extends State<PickLocationScreen> {
     );
   }
 
-// —------— вкладка "Карта" —--------
   Widget _buildMap(BuildContext context) {
     return FlutterMap(
       options: MapOptions(
@@ -292,8 +259,7 @@ class _PickLocationScreenState extends State<PickLocationScreen> {
       ),
       children: [
         TileLayer(
-          urlTemplate:
-              '[#alias|tile.openstreetmap.org/{z}/{x}/{y...|https://tile.openstreetmap.org/{z}/{x}/{y}.png]',
+          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
           userAgentPackageName: 'com.example.chestore2',
         ),
         MarkerLayer(

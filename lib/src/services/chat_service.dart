@@ -9,11 +9,8 @@ class ChatService {
   final SupabaseClient _db = Supabase.instance.client;
   final _uuid = const Uuid();
 
-  // =========================
-  // STREAMS
-  // =========================
+  static const String _chatImagesBucket = 'chat_images';
 
-  /// Чаты пользователя (buyer_id или seller_id)
   Stream<List<Chat>> streamMyChats(String uid) {
     final stream = _db
         .from('chats')
@@ -40,17 +37,16 @@ class ChatService {
     final stream = _db.from('chats').stream(primaryKey: ['id']);
 
     return stream.map((rows) {
-      int total = 0;
+      var total = 0;
 
       for (final r in rows) {
         final buyerId = (r['buyer_id'] ?? '').toString();
         final sellerId = (r['seller_id'] ?? '').toString();
         if (buyerId != uid && sellerId != uid) continue;
 
-        final ub = (r['unread_for_buyer'] as num?)?.toInt() ?? 0;
-        final us = (r['unread_for_seller'] as num?)?.toInt() ?? 0;
-
-        total += (uid == buyerId) ? ub : us;
+        final unreadForBuyer = (r['unread_for_buyer'] as num?)?.toInt() ?? 0;
+        final unreadForSeller = (r['unread_for_seller'] as num?)?.toInt() ?? 0;
+        total += uid == buyerId ? unreadForBuyer : unreadForSeller;
       }
 
       return total;
@@ -72,10 +68,6 @@ class ChatService {
       return out;
     });
   }
-
-  // =========================
-  // GET / CREATE CHAT
-  // =========================
 
   Future<String> getOrCreateChat({
     required String listingId,
@@ -112,10 +104,6 @@ class ChatService {
     return newId;
   }
 
-  // =========================
-  // READ
-  // =========================
-
   Future<void> markChatRead({
     required String chatId,
     required String uid,
@@ -138,17 +126,13 @@ class ChatService {
     }
   }
 
-  // =========================
-  // SEND TEXT
-  // =========================
-
   Future<void> sendMessage({
     required String chatId,
     required String senderId,
     required String text,
   }) async {
-    final t = text.trim();
-    if (t.isEmpty) return;
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return;
 
     final chat = await _db
         .from('chats')
@@ -165,31 +149,27 @@ class ChatService {
       'id': _uuid.v4(),
       'chat_id': chatId,
       'sender_id': senderId,
-      'text': t,
+      'text': trimmed,
       'image_url': null,
       'created_at': DateTime.now().toUtc().toIso8601String(),
     });
 
-    int ub = (chat['unread_for_buyer'] as num?)?.toInt() ?? 0;
-    int us = (chat['unread_for_seller'] as num?)?.toInt() ?? 0;
+    var unreadForBuyer = (chat['unread_for_buyer'] as num?)?.toInt() ?? 0;
+    var unreadForSeller = (chat['unread_for_seller'] as num?)?.toInt() ?? 0;
 
     if (senderId == buyerId) {
-      us += 1;
+      unreadForSeller += 1;
     } else if (senderId == sellerId) {
-      ub += 1;
+      unreadForBuyer += 1;
     }
 
     await _db.from('chats').update({
-      'last_message': t,
+      'last_message': trimmed,
       'updated_at': DateTime.now().toUtc().toIso8601String(),
-      'unread_for_buyer': ub,
-      'unread_for_seller': us,
+      'unread_for_buyer': unreadForBuyer,
+      'unread_for_seller': unreadForSeller,
     }).eq('id', chatId);
   }
-
-  // =========================
-  // SEND IMAGE
-  // =========================
 
   Future<void> sendImage({
     required String chatId,
@@ -206,14 +186,11 @@ class ChatService {
 
     final buyerId = (chat['buyer_id'] ?? '').toString();
     final sellerId = (chat['seller_id'] ?? '').toString();
-
-    const bucket = 'chat_images'; // bucket должен существовать
-
     final fileId = _uuid.v4();
     final path = '$chatId/$fileId.jpg';
 
     final bytes = await file.readAsBytes();
-    await _db.storage.from(bucket).uploadBinary(
+    await _db.storage.from(_chatImagesBucket).uploadBinary(
       path,
       bytes,
       fileOptions: const FileOptions(
@@ -223,37 +200,59 @@ class ChatService {
       ),
     );
 
-    final url = _db.storage.from(bucket).getPublicUrl(path);
-
     await _db.from('chat_messages').insert({
       'id': _uuid.v4(),
       'chat_id': chatId,
       'sender_id': senderId,
       'text': '',
-      'image_url': url,
+      'image_url': path,
       'created_at': DateTime.now().toUtc().toIso8601String(),
     });
 
-    int ub = (chat['unread_for_buyer'] as num?)?.toInt() ?? 0;
-    int us = (chat['unread_for_seller'] as num?)?.toInt() ?? 0;
+    var unreadForBuyer = (chat['unread_for_buyer'] as num?)?.toInt() ?? 0;
+    var unreadForSeller = (chat['unread_for_seller'] as num?)?.toInt() ?? 0;
 
     if (senderId == buyerId) {
-      us += 1;
+      unreadForSeller += 1;
     } else if (senderId == sellerId) {
-      ub += 1;
+      unreadForBuyer += 1;
     }
 
     await _db.from('chats').update({
-      'last_message': '📷 Фото',
+      'last_message': 'Фото',
       'updated_at': DateTime.now().toUtc().toIso8601String(),
-      'unread_for_buyer': ub,
-      'unread_for_seller': us,
+      'unread_for_buyer': unreadForBuyer,
+      'unread_for_seller': unreadForSeller,
     }).eq('id', chatId);
   }
 
-  // =========================
-  // DELETE CHAT
-  // =========================
+  Future<String> resolveMessageImageUrl(String rawValue) async {
+    final value = rawValue.trim();
+    if (value.isEmpty) return '';
+
+    final normalizedPath = _extractChatImagePath(value);
+    if (normalizedPath == null) {
+      return value;
+    }
+
+    return _db.storage.from(_chatImagesBucket).createSignedUrl(
+          normalizedPath,
+          60 * 60 * 24 * 30,
+        );
+  }
+
+  String? _extractChatImagePath(String value) {
+    if (!value.contains('://')) {
+      return value;
+    }
+
+    final marker = '/$_chatImagesBucket/';
+    final idx = value.indexOf(marker);
+    if (idx == -1) return null;
+
+    final path = value.substring(idx + marker.length).trim();
+    return path.isEmpty ? null : path;
+  }
 
   Future<void> deleteChat({
     required String chatId,
@@ -292,7 +291,7 @@ class ChatService {
     if (msg == null) return;
     if ((msg['chat_id'] ?? '').toString() != chatId) return;
     if ((msg['sender_id'] ?? '').toString() != uid) {
-      throw Exception('Можно удалить только своё сообщение');
+      throw Exception('Можно удалить только свое сообщение');
     }
 
     await _db.from('chat_messages').delete().eq('id', messageId);

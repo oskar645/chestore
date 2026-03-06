@@ -283,15 +283,20 @@ class _AddListingScreenState extends State<AddListingScreen> {
   }
 
   Future<void> _openMap() async {
-    final res = await Navigator.of(context).push<latlng.LatLng>(
+    final res = await Navigator.of(context).push<dynamic>(
       MaterialPageRoute(builder: (_) => const PickLocationScreen()),
     );
     if (res == null) return;
-    setState(() => _pickedLatLng = res);
-
-    await _fillCityFromLatLng(res);
-
-    if (mounted) setState(() {});
+    if (res is latlng.LatLng) {
+      setState(() => _pickedLatLng = res);
+      await _fillCityFromLatLng(res);
+      if (mounted) setState(() {});
+      return;
+    }
+    if (res is String) {
+      _city.text = res;
+      if (mounted) setState(() => _pickedLatLng = null);
+    }
   }
 
   // ================== ДОСТАВКА ==================

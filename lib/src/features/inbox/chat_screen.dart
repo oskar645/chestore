@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:chestore2/src/models/message.dart';
+import 'package:chestore2/src/features/listings/photo_viewer_screen.dart';
 import 'package:chestore2/src/services/auth_service.dart';
 import 'package:chestore2/src/services/chat_service.dart';
 import 'package:chestore2/src/services/presence_service.dart';
@@ -155,26 +156,60 @@ class _ChatScreenState extends State<ChatScreen> {
 
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => Scaffold(
-          backgroundColor: Colors.black,
-          appBar: AppBar(
-            backgroundColor: Colors.black,
-            foregroundColor: Colors.white,
-          ),
-          body: SafeArea(
-            child: Center(
-              child: InteractiveViewer(
-                minScale: 1,
-                maxScale: 4,
-                child: CachedNetworkImage(
-                  imageUrl: url,
-                  fit: BoxFit.contain,
-                ),
-              ),
+        builder: (_) => PhotoViewerScreen(photoUrls: [url]),
+      ),
+    );
+  }
+
+  Widget _messageImage(ChatService chatSvc, String rawImageUrl) {
+    return FutureBuilder<String>(
+      future: chatSvc.resolveMessageImageUrl(rawImageUrl),
+      builder: (context, snap) {
+        final resolvedUrl = (snap.data ?? '').trim();
+
+        if (snap.connectionState != ConnectionState.done) {
+          return Container(
+            width: 240,
+            height: 180,
+            color: Colors.black12,
+            alignment: Alignment.center,
+            child: const CircularProgressIndicator(),
+          );
+        }
+
+        if (resolvedUrl.isEmpty) {
+          return Container(
+            width: 240,
+            height: 180,
+            color: Colors.black12,
+            alignment: Alignment.center,
+            child: const Icon(Icons.broken_image_outlined),
+          );
+        }
+
+        return GestureDetector(
+          onTap: () => _openImageFullScreen(resolvedUrl),
+          child: CachedNetworkImage(
+            imageUrl: resolvedUrl,
+            width: 240,
+            fit: BoxFit.cover,
+            placeholder: (_, __) => Container(
+              width: 240,
+              height: 180,
+              color: Colors.black12,
+              alignment: Alignment.center,
+              child: const CircularProgressIndicator(),
+            ),
+            errorWidget: (_, __, ___) => Container(
+              width: 240,
+              height: 180,
+              color: Colors.black12,
+              alignment: Alignment.center,
+              child: const Icon(Icons.broken_image_outlined),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -422,14 +457,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                           if (hasImg)
                                             ClipRRect(
                                               borderRadius: BorderRadius.circular(10),
-                                              child: GestureDetector(
-                                                onTap: () => _openImageFullScreen(m.imageUrl!),
-                                                child: CachedNetworkImage(
-                                                  imageUrl: m.imageUrl!,
-                                                  width: 240,
-                                                  fit: BoxFit.cover,
-                                                ),
-                                              ),
+                                              child: _messageImage(chatSvc, m.imageUrl!),
                                             ),
                                           if (m.text.isNotEmpty) ...[
                                             if (hasImg) const SizedBox(height: 6),
