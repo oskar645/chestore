@@ -34,6 +34,103 @@ class _NotificationsScreenState extends State<NotificationsScreen>
     super.dispose();
   }
 
+  Widget _buildList({
+    required List<Map<String, dynamic>> items,
+    required NotificationsService notifications,
+    required bool allowMarkRead,
+    required bool showScopeTag,
+    required String emptyText,
+  }) {
+    if (items.isEmpty) {
+      return Center(child: Text(emptyText));
+    }
+
+    return ListView.separated(
+      padding: const EdgeInsets.all(12),
+      itemCount: items.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 8),
+      itemBuilder: (_, i) {
+        final n = items[i];
+        final id = (n['id'] ?? '').toString();
+        final title = (n['title'] ?? '').toString();
+        final body = (n['body'] ?? '').toString();
+        final scope = (n['scope'] ?? '').toString();
+        final isRead = n['is_read'] == true;
+        final createdRaw = n['created_at'];
+        DateTime? created;
+        if (createdRaw is String) created = DateTime.tryParse(createdRaw);
+        if (createdRaw is DateTime) created = createdRaw;
+
+        final isPersonal = scope == 'personal';
+        final unreadPersonal = isPersonal && !isRead;
+
+        return Card(
+          child: ListTile(
+            leading: Icon(
+              unreadPersonal ? Icons.mark_email_unread : Icons.notifications_none,
+              color: unreadPersonal ? Colors.red : Theme.of(context).colorScheme.outline,
+            ),
+            title: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    title,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: unreadPersonal
+                          ? Theme.of(context).colorScheme.onSurface
+                          : Theme.of(context).colorScheme.onSurface,
+                    ),
+                  ),
+                ),
+                if (showScopeTag)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: isPersonal
+                          ? Theme.of(context).colorScheme.primaryContainer
+                          : Theme.of(context).colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      isPersonal ? 'Личное' : 'Общее',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: Theme.of(context).colorScheme.onSurface,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: 4),
+                Text(body),
+                if (created != null) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    timeago.format(created, locale: 'ru'),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.outline,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            onTap: allowMarkRead && unreadPersonal
+                ? () async {
+                    await notifications.markPersonalReadById(id);
+                  }
+                : null,
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final me = context.read<AuthService>().currentUser!;
@@ -71,50 +168,13 @@ class _NotificationsScreenState extends State<NotificationsScreen>
               if (!snap.hasData) {
                 return const Center(child: CircularProgressIndicator());
               }
-              final items = snap.data!;
-              if (items.isEmpty) {
-                return const Center(child: Text('Пока нет общих уведомлений'));
-              }
 
-              return ListView.separated(
-                padding: const EdgeInsets.all(12),
-                itemCount: items.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 8),
-                itemBuilder: (_, i) {
-                  final n = items[i];
-                  final title = (n['title'] ?? '').toString();
-                  final body = (n['body'] ?? '').toString();
-                  final createdRaw = n['created_at'];
-                  DateTime? created;
-                  if (createdRaw is String) created = DateTime.tryParse(createdRaw);
-                  if (createdRaw is DateTime) created = createdRaw;
-
-                  return Card(
-                    child: ListTile(
-                      title: Text(
-                        title,
-                        style: const TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                      subtitle: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const SizedBox(height: 4),
-                          Text(body),
-                          if (created != null) ...[
-                            const SizedBox(height: 6),
-                            Text(
-                              timeago.format(created, locale: 'ru'),
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Theme.of(context).colorScheme.outline,
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                  );
-                },
+              return _buildList(
+                items: snap.data!,
+                notifications: notifications,
+                allowMarkRead: false,
+                showScopeTag: false,
+                emptyText: 'Пока нет общих уведомлений',
               );
             },
           ),
@@ -127,68 +187,13 @@ class _NotificationsScreenState extends State<NotificationsScreen>
               if (!snap.hasData) {
                 return const Center(child: CircularProgressIndicator());
               }
-              final items = snap.data!;
-              if (items.isEmpty) {
-                return const Center(child: Text('Личных уведомлений пока нет'));
-              }
 
-              return ListView.separated(
-                padding: const EdgeInsets.all(12),
-                itemCount: items.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 8),
-                itemBuilder: (_, i) {
-                  final n = items[i];
-                  final id = (n['id'] ?? '').toString();
-                  final title = (n['title'] ?? '').toString();
-                  final body = (n['body'] ?? '').toString();
-                  final isRead = n['is_read'] == true;
-                  final createdRaw = n['created_at'];
-                  DateTime? created;
-                  if (createdRaw is String) created = DateTime.tryParse(createdRaw);
-                  if (createdRaw is DateTime) created = createdRaw;
-
-                  return Card(
-                    child: ListTile(
-                      leading: Icon(
-                        isRead ? Icons.mark_email_read : Icons.mark_email_unread,
-                        color: isRead
-                            ? Theme.of(context).colorScheme.outline
-                            : Colors.red,
-                      ),
-                      title: Text(
-                        title,
-                        style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          color: isRead
-                              ? Theme.of(context).colorScheme.outline
-                              : Theme.of(context).colorScheme.onSurface,
-                        ),
-                      ),
-                      subtitle: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const SizedBox(height: 4),
-                          Text(body),
-                          if (created != null) ...[
-                            const SizedBox(height: 6),
-                            Text(
-                              timeago.format(created, locale: 'ru'),
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Theme.of(context).colorScheme.outline,
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                      onTap: () async {
-                        if (!isRead) {
-                          await notifications.markPersonalReadById(id);
-                        }
-                      },
-                    ),
-                  );
-                },
+              return _buildList(
+                items: snap.data!,
+                notifications: notifications,
+                allowMarkRead: true,
+                showScopeTag: false,
+                emptyText: 'Личных уведомлений пока нет',
               );
             },
           ),

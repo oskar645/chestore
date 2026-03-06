@@ -12,6 +12,7 @@ import 'package:chestore2/src/features/notifications/notifications_screen.dart';
 import 'package:chestore2/src/models/listing.dart';
 import 'package:chestore2/src/services/auth_service.dart';
 import 'package:chestore2/src/services/favorites_service.dart';
+import 'package:chestore2/src/services/home_filters_session.dart';
 import 'package:chestore2/src/services/listings_service.dart';
 import 'package:chestore2/src/services/notifications_service.dart';
 import 'package:chestore2/src/services/reviews_service.dart';
@@ -26,6 +27,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   String _category = 'Все';
+  String _subcategory = 'Все';
   String _search = '';
   final _searchCtrl = TextEditingController();
 
@@ -40,17 +42,68 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _onlyUncrashed = false;
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _restoreFilters();
+    });
+  }
+
+  @override
   void dispose() {
     _searchCtrl.dispose();
     super.dispose();
   }
 
+  void _restoreFilters() {
+    final uid = context.read<AuthService>().currentUser?.uid;
+    if (uid == null || uid.isEmpty) return;
+
+    final saved = homeFiltersSession.read(uid);
+    if (saved == null) return;
+
+    setState(() {
+      _category = saved.category;
+      _subcategory = saved.subcategory;
+      _location = saved.location;
+      _preferLocationFirst = saved.preferLocationFirst;
+      _radiusKm = saved.radiusKm;
+      _autoBrand = saved.autoBrand;
+      _autoModel = saved.autoModel;
+      _autoCondition = saved.autoCondition;
+      _autoMileageTo = saved.autoMileageTo;
+      _onlyUncrashed = saved.onlyUncrashed;
+    });
+  }
+
+  void _persistFilters() {
+    final uid = context.read<AuthService>().currentUser?.uid;
+    if (uid == null || uid.isEmpty) return;
+
+    homeFiltersSession.write(
+      uid: uid,
+      category: _category,
+      subcategory: _subcategory,
+      location: _location,
+      preferLocationFirst: _preferLocationFirst,
+      radiusKm: _radiusKm,
+      autoBrand: _autoBrand,
+      autoModel: _autoModel,
+      autoCondition: _autoCondition,
+      autoMileageTo: _autoMileageTo,
+      onlyUncrashed: _onlyUncrashed,
+    );
+  }
+
   void _selectCategory(String c) {
     setState(() {
       _category = c;
+      _subcategory = 'Все';
       _search = '';
       _searchCtrl.clear();
     });
+    _persistFilters();
   }
 
   Future<void> _openFilters() async {
@@ -58,6 +111,7 @@ class _HomeScreenState extends State<HomeScreen> {
       MaterialPageRoute(
         builder: (_) => _FiltersScreen(
           initialCategory: _category,
+          initialSubcategory: _subcategory,
           initialLocation: _location,
           initialPreferFirst: _preferLocationFirst,
           initialRadiusKm: _radiusKm,
@@ -74,6 +128,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     setState(() {
       _category = res.category;
+      _subcategory = res.subcategory;
       _location = res.location;
       _preferLocationFirst = res.preferFirst;
       _radiusKm = res.radiusKm;
@@ -83,6 +138,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _autoMileageTo = res.autoMileageTo;
       _onlyUncrashed = res.onlyUncrashed;
     });
+    _persistFilters();
   }
 
   List<Listing> _applyLocationPriority(List<Listing> items) {
@@ -130,6 +186,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
   List<Listing> _applyAdvancedFilters(List<Listing> items) {
     Iterable<Listing> out = items;
+
+    if (_subcategory != 'Все') {
+      out = out.where((x) => x.subcategory == _subcategory);
+    }
 
     final hasAutoFilters = _autoBrand.isNotEmpty ||
         _autoModel.isNotEmpty ||
@@ -180,21 +240,45 @@ class _HomeScreenState extends State<HomeScreen> {
                 onPressed: () => Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const NotificationsScreen()),
                 ),
-                icon: Icon(
-                  unread > 0
-                      ? Icons.notifications_active
-                      : Icons.notifications_outlined,
-                  color: unread > 0 ? Colors.red : null,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                icon: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Icon(
+                      unread > 0
+                          ? Icons.notifications_active
+                          : Icons.notifications_outlined,
+                      color: unread > 0 ? Colors.red : null,
+                    ),
+                    if (unread > 0)
+                      Positioned(
+                        right: -8,
+                        top: -6,
+                        child: Container(
+                          constraints:
+                              const BoxConstraints(minWidth: 14, minHeight: 14),
+                          padding: const EdgeInsets.symmetric(horizontal: 3),
+                          decoration: BoxDecoration(
+                            color: Colors.red,
+                            borderRadius: BorderRadius.circular(9),
+                          ),
+                          alignment: Alignment.center,
+                          child: Text(
+                            unread > 99 ? '99+' : '$unread',
+                            style: const TextStyle(
+                              fontSize: 8,
+                              height: 1.0,
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
               );
-
-              if (unread <= 0) return icon;
-
-              return Badge(
-                backgroundColor: Colors.red,
-                label: Text(unread > 99 ? '99+' : '$unread'),
-                child: icon,
-              );
+              return icon;
             },
           ),
           IconButton(
@@ -207,43 +291,43 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       body: Column(
         children: [
-          _CategoryRow(selected: _category, onSelect: _selectCategory),
-
-          // ✅ Поиск как раньше, но с круглыми углами и фильтром справа
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
-            child: TextField(
-              controller: _searchCtrl,
-              decoration: InputDecoration(
-                prefixIcon: const Icon(Icons.search),
-
-                // ✅ справа фильтр как Avito
-                suffixIcon: IconButton(
-                  tooltip: 'Фильтры',
-                  onPressed: _openFilters,
-                  icon: const Icon(Icons.tune),
-                ),
-
-                hintText: hint,
-                isDense: true,
-
-                // ✅ круглые углы
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(16),
-                  borderSide: BorderSide(color: Theme.of(context).dividerColor),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(16),
-                  borderSide: BorderSide(
-                    color: Theme.of(context).colorScheme.primary,
-                    width: 1.6,
+          Container(
+            color: Theme.of(context).scaffoldBackgroundColor,
+            child: Column(
+              children: [
+                _CategoryRow(selected: _category, onSelect: _selectCategory),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+                  child: TextField(
+                    controller: _searchCtrl,
+                    decoration: InputDecoration(
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: IconButton(
+                        tooltip: 'Фильтры',
+                        onPressed: _openFilters,
+                        icon: const Icon(Icons.tune),
+                      ),
+                      hintText: hint,
+                      isDense: true,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(16),
+                        borderSide: BorderSide(color: Theme.of(context).dividerColor),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(16),
+                        borderSide: BorderSide(
+                          color: Theme.of(context).colorScheme.primary,
+                          width: 1.6,
+                        ),
+                      ),
+                    ),
+                    onChanged: (v) => setState(() => _search = v.trim()),
                   ),
                 ),
-              ),
-              onChanged: (v) => setState(() => _search = v.trim()),
+              ],
             ),
           ),
 
@@ -277,6 +361,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     }
 
                     return GridView.builder(
+                      clipBehavior: Clip.hardEdge,
                       padding: const EdgeInsets.all(10),
                       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                         crossAxisCount: 2,
@@ -363,6 +448,7 @@ class _CategoryRow extends StatelessWidget {
 
 class _HomeFilters {
   final String category;
+  final String subcategory;
   final String location; // город/регион строкой
   final bool preferFirst; // “Сначала из …”
   final int? radiusKm;
@@ -374,6 +460,7 @@ class _HomeFilters {
 
   const _HomeFilters({
     required this.category,
+    required this.subcategory,
     required this.location,
     required this.preferFirst,
     required this.radiusKm,
@@ -387,6 +474,7 @@ class _HomeFilters {
 
 class _FiltersScreen extends StatefulWidget {
   final String initialCategory;
+  final String initialSubcategory;
   final String initialLocation;
   final bool initialPreferFirst;
   final int? initialRadiusKm;
@@ -398,6 +486,7 @@ class _FiltersScreen extends StatefulWidget {
 
   const _FiltersScreen({
     required this.initialCategory,
+    required this.initialSubcategory,
     required this.initialLocation,
     required this.initialPreferFirst,
     required this.initialRadiusKm,
@@ -414,6 +503,7 @@ class _FiltersScreen extends StatefulWidget {
 
 class _FiltersScreenState extends State<_FiltersScreen> {
   late String _category = widget.initialCategory;
+  late String _subcategory = widget.initialSubcategory;
   late String _location = widget.initialLocation;
   late bool _preferFirst = widget.initialPreferFirst;
   late int? _radiusKm = widget.initialRadiusKm;
@@ -450,9 +540,32 @@ class _FiltersScreenState extends State<_FiltersScreen> {
     super.dispose();
   }
 
+  void _applyFilters() {
+    Navigator.pop(
+      context,
+      _HomeFilters(
+        category: _category,
+        subcategory: _subcategory,
+        location: _location.trim(),
+        preferFirst: _preferFirst,
+        radiusKm: _radiusKm,
+        autoBrand: _autoBrand,
+        autoModel: _autoModel,
+        autoCondition: _autoCondition,
+        autoMileageTo: _autoMileageTo,
+        onlyUncrashed: _onlyUncrashed,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cats = kCategories;
+    final subs = kSubcategories[_category] ?? const <String>[];
+    final subItems = ['Все', ...subs];
+    if (!subItems.contains(_subcategory)) {
+      _subcategory = 'Все';
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -462,6 +575,7 @@ class _FiltersScreenState extends State<_FiltersScreen> {
             onPressed: () {
               setState(() {
                 _category = 'Все';
+                _subcategory = 'Все';
                 _location = '';
                 _preferFirst = false;
                 _radiusKm = null;
@@ -496,11 +610,32 @@ class _FiltersScreenState extends State<_FiltersScreen> {
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(20),
                 ),
-                onSelected: (_) => setState(() => _category = c),
+                onSelected: (_) {
+                  setState(() {
+                    _category = c;
+                    _subcategory = 'Все';
+                  });
+                },
               );
             }).toList(),
           ),
           const SizedBox(height: 12),
+
+          if (_category != 'Все' && subs.isNotEmpty) ...[
+            DropdownButtonFormField<String>(
+              value: _subcategory,
+              items: subItems
+                  .map((x) => DropdownMenuItem(value: x, child: Text(x)))
+                  .toList(),
+              onChanged: (v) => setState(() => _subcategory = v ?? 'Все'),
+              decoration: const InputDecoration(
+                labelText: 'Подкатегория',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
 
           if (_isAutoCategory) ...[
             DropdownButtonFormField<String>(
@@ -603,28 +738,16 @@ class _FiltersScreenState extends State<_FiltersScreen> {
             },
           ),
 
-          const SizedBox(height: 16),
-
-          FilledButton(
-            onPressed: () {
-              Navigator.pop(
-                context,
-                _HomeFilters(
-                  category: _category,
-                  location: _location.trim(),
-                  preferFirst: _preferFirst,
-                  radiusKm: _radiusKm,
-                  autoBrand: _autoBrand,
-                  autoModel: _autoModel,
-                  autoCondition: _autoCondition,
-                  autoMileageTo: _autoMileageTo,
-                  onlyUncrashed: _onlyUncrashed,
-                ),
-              );
-            },
-            child: const Text('Применить'),
-          ),
+          const SizedBox(height: 20),
         ],
+      ),
+      bottomNavigationBar: SafeArea(
+        top: false,
+        minimum: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+        child: FilledButton(
+          onPressed: _applyFilters,
+          child: const Text('Применить'),
+        ),
       ),
     );
   }
@@ -896,6 +1019,7 @@ class _RadiusPickerScreenState extends State<_RadiusPickerScreen> {
     );
   }
 }
+
 
 
 

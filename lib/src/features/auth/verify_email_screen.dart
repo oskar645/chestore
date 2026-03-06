@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:chestore2/src/services/profile_service.dart';
 
@@ -59,6 +60,10 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
 
     if (code.isEmpty) {
       _snack('Введите код из письма');
+      return;
+    }
+    if (code.length != 6) {
+      _snack('Код должен содержать 6 цифр');
       return;
     }
 
@@ -128,12 +133,16 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
           children: [
             Text('Мы отправили письмо с кодом на:\n${widget.email}'),
             const SizedBox(height: 12),
-            const Text('Открой письмо, скопируй код и введи его ниже.'),
+            const Text('Открой письмо, скопируй 6-значный код и введи его ниже.'),
             const SizedBox(height: 16),
 
             TextField(
               controller: _codeCtrl,
               keyboardType: TextInputType.number,
+              inputFormatters: [
+                FilteringTextInputFormatter.digitsOnly,
+                LengthLimitingTextInputFormatter(6),
+              ],
               textInputAction: TextInputAction.done,
               decoration: const InputDecoration(
                 labelText: 'Код из письма',

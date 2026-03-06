@@ -4,11 +4,11 @@ class HomeFiltersState {
   final String location;
   final bool preferLocationFirst;
   final int? radiusKm;
-  final String carConditionFilter;
-  final String carBrandFilter;
-  final String carModelFilter;
-  final String carDriveFilter;
-  final String carBodyFilter;
+  final String autoBrand;
+  final String autoModel;
+  final String autoCondition;
+  final int? autoMileageTo;
+  final bool onlyUncrashed;
 
   const HomeFiltersState({
     required this.category,
@@ -16,11 +16,11 @@ class HomeFiltersState {
     required this.location,
     required this.preferLocationFirst,
     required this.radiusKm,
-    required this.carConditionFilter,
-    required this.carBrandFilter,
-    required this.carModelFilter,
-    required this.carDriveFilter,
-    required this.carBodyFilter,
+    required this.autoBrand,
+    required this.autoModel,
+    required this.autoCondition,
+    required this.autoMileageTo,
+    required this.onlyUncrashed,
   });
 }
 
@@ -44,11 +44,11 @@ class HomeFiltersSession {
     required String location,
     required bool preferLocationFirst,
     required int? radiusKm,
-    required String carConditionFilter,
-    required String carBrandFilter,
-    required String carModelFilter,
-    required String carDriveFilter,
-    required String carBodyFilter,
+    required String autoBrand,
+    required String autoModel,
+    required String autoCondition,
+    required int? autoMileageTo,
+    required bool onlyUncrashed,
   }) {
     final key = uid.trim();
     if (key.isEmpty) return;
@@ -58,11 +58,11 @@ class HomeFiltersSession {
       location: location,
       preferLocationFirst: preferLocationFirst,
       radiusKm: radiusKm,
-      carConditionFilter: carConditionFilter,
-      carBrandFilter: carBrandFilter,
-      carModelFilter: carModelFilter,
-      carDriveFilter: carDriveFilter,
-      carBodyFilter: carBodyFilter,
+      autoBrand: autoBrand,
+      autoModel: autoModel,
+      autoCondition: autoCondition,
+      autoMileageTo: autoMileageTo,
+      onlyUncrashed: onlyUncrashed,
     );
   }
 

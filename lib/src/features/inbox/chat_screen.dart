@@ -11,6 +11,8 @@ import 'package:chestore2/src/services/auth_service.dart';
 import 'package:chestore2/src/services/chat_service.dart';
 import 'package:chestore2/src/services/presence_service.dart';
 import 'package:chestore2/src/services/profile_service.dart';
+import 'package:chestore2/src/features/profile/seller_public_profile_screen.dart';
+import 'package:chestore2/src/utils/app_snackbar.dart';
 
 class ChatScreen extends StatefulWidget {
   final String chatId;
@@ -89,9 +91,7 @@ class _ChatScreenState extends State<ChatScreen> {
       await chat.markChatRead(chatId: widget.chatId, uid: uid);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Ошибка: $e')),
-      );
+      showAppSnack(context, 'Ошибка: $e', isError: true);
     } finally {
       if (mounted) setState(() => _sending = false);
     }
@@ -113,9 +113,7 @@ class _ChatScreenState extends State<ChatScreen> {
       await chat.markChatRead(chatId: widget.chatId, uid: uid);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Ошибка: $e')),
-      );
+      showAppSnack(context, 'Ошибка: $e', isError: true);
     } finally {
       if (mounted) setState(() => _sending = false);
     }
@@ -214,53 +212,66 @@ class _ChatScreenState extends State<ChatScreen> {
           );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Ошибка удаления: $e')),
-      );
+      showAppSnack(context, 'Ошибка удаления: $e', isError: true);
     }
+  }
+
+  void _openSellerProfile(String sellerId) {
+    final id = sellerId.trim();
+    if (id.isEmpty) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => SellerPublicProfileScreen(sellerId: id),
+      ),
+    );
   }
 
   Widget _topListingBar({
     required String listingTitle,
     required String thumbUrl,
+    required VoidCallback onTap,
   }) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
-      decoration: BoxDecoration(
-        color: Theme.of(context).scaffoldBackgroundColor,
-        border: Border(
-          bottom: BorderSide(color: Theme.of(context).dividerColor.withOpacity(0.2)),
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+        decoration: BoxDecoration(
+          color: Theme.of(context).scaffoldBackgroundColor,
+          border: Border(
+            bottom: BorderSide(color: Theme.of(context).dividerColor.withValues(alpha: 0.2)),
+          ),
         ),
-      ),
-      child: Row(
-        children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: thumbUrl.trim().isEmpty
-                ? Container(
-                    width: 44,
-                    height: 44,
-                    color: Colors.grey.withOpacity(0.2),
-                    alignment: Alignment.center,
-                    child: const Icon(Icons.image_outlined),
-                  )
-                : CachedNetworkImage(
-                    imageUrl: thumbUrl,
-                    width: 44,
-                    height: 44,
-                    fit: BoxFit.cover,
-                  ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              listingTitle.trim().isEmpty ? 'Объявление' : listingTitle.trim(),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontWeight: FontWeight.w700),
+        child: Row(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: thumbUrl.trim().isEmpty
+                  ? Container(
+                      width: 44,
+                      height: 44,
+                      color: Colors.grey.withValues(alpha: 0.2),
+                      alignment: Alignment.center,
+                      child: const Icon(Icons.image_outlined),
+                    )
+                  : CachedNetworkImage(
+                      imageUrl: thumbUrl,
+                      width: 44,
+                      height: 44,
+                      fit: BoxFit.cover,
+                    ),
             ),
-          ),
-        ],
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                listingTitle.trim().isEmpty ? 'Объявление' : listingTitle.trim(),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+            const Icon(Icons.chevron_right),
+          ],
+        ),
       ),
     );
   }
@@ -345,10 +356,13 @@ class _ChatScreenState extends State<ChatScreen> {
                             ),
                             const SizedBox(width: 8),
                             Expanded(
-                              child: Text(
-                                otherName.isEmpty ? '...' : otherName,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
+                              child: GestureDetector(
+                                onTap: () => _openSellerProfile(sellerId),
+                                child: Text(
+                                  otherName.isEmpty ? '...' : otherName,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ),
                             ),
                           ],
@@ -358,7 +372,11 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                   body: Column(
                     children: [
-                      _topListingBar(listingTitle: listingTitle, thumbUrl: thumb),
+                      _topListingBar(
+                        listingTitle: listingTitle,
+                        thumbUrl: thumb,
+                        onTap: () => _openSellerProfile(sellerId),
+                      ),
                       Expanded(
                         child: StreamBuilder<List<ChatMessage>>(
                           stream: chatSvc.streamMessages(widget.chatId),

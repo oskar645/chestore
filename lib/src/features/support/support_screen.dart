@@ -1,6 +1,7 @@
 import 'package:chestore2/src/services/auth_service.dart';
 import 'package:chestore2/src/services/profile_service.dart';
 import 'package:chestore2/src/services/support_service.dart';
+import 'package:chestore2/src/utils/app_snackbar.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -38,7 +39,7 @@ class _SupportScreenState extends State<SupportScreen> {
       final existing = await support.getOrCreateMyTicketId(uid: uid);
       if (!mounted) return;
       setState(() {
-        _ticketId = existing; // может быть null, если тикета нет
+        _ticketId = existing;
         _loadingTicket = false;
       });
     } catch (_) {
@@ -58,7 +59,6 @@ class _SupportScreenState extends State<SupportScreen> {
 
     final ad = (u.displayName ?? '').trim();
     if (ad.isNotEmpty) return ad;
-
     return u.email ?? 'Пользователь';
   }
 
@@ -73,7 +73,6 @@ class _SupportScreenState extends State<SupportScreen> {
     try {
       if (_ticketId == null) {
         final name = await _getMyName();
-
         _ticketId = await support.createTicketAndSendFirstMessage(
           uid: auth.currentUser!.uid,
           name: name,
@@ -87,9 +86,7 @@ class _SupportScreenState extends State<SupportScreen> {
       if (mounted) setState(() {});
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Ошибка: $e')),
-      );
+      showAppSnack(context, 'Ошибка: $e', isError: true);
     } finally {
       if (mounted) setState(() => _sending = false);
     }
@@ -108,7 +105,9 @@ class _SupportScreenState extends State<SupportScreen> {
                 ? const Center(child: CircularProgressIndicator())
                 : (_ticketId == null
                     ? const Center(
-                        child: Text('Напишите сообщение — создастся тикет поддержки'),
+                        child: Text(
+                          'Напишите сообщение, и тикет поддержки будет создан',
+                        ),
                       )
                     : StreamBuilder<List<Map<String, dynamic>>>(
                         stream: support.streamMessages(_ticketId!),
@@ -129,12 +128,12 @@ class _SupportScreenState extends State<SupportScreen> {
                               final m = items[i];
                               final sender = (m['sender'] ?? '').toString();
                               final text = (m['text'] ?? '').toString();
-
                               final mine = sender == 'user';
 
                               return Align(
-                                alignment:
-                                    mine ? Alignment.centerRight : Alignment.centerLeft,
+                                alignment: mine
+                                    ? Alignment.centerRight
+                                    : Alignment.centerLeft,
                                 child: Container(
                                   margin: const EdgeInsets.symmetric(vertical: 4),
                                   padding: const EdgeInsets.all(10),

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:timeago/timeago.dart' as timeago;
 
 import 'package:chestore2/src/features/inbox/chat_screen.dart';
+import 'package:chestore2/src/features/support/support_screen.dart';
 import 'package:chestore2/src/models/chat.dart';
 import 'package:chestore2/src/services/auth_service.dart';
 import 'package:chestore2/src/services/chat_service.dart';
@@ -27,7 +28,22 @@ class InboxScreen extends StatelessWidget {
     final presence = context.read<PresenceService>();
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Сообщения')),
+      appBar: AppBar(
+        title: const Text('Сообщения'),
+        actions: [
+          IconButton(
+            tooltip: 'Поддержка',
+            icon: const Icon(Icons.headset_mic_outlined, color: Colors.blue),
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const SupportScreen(),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
       body: StreamBuilder<List<Chat>>(
         stream: chat.streamMyChats(uid),
         builder: (context, snap) {
@@ -68,7 +84,7 @@ class InboxScreen extends StatelessWidget {
                   padding: const EdgeInsets.only(right: 16),
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(12),
-                    color: Colors.red.withOpacity(0.15),
+                    color: Colors.red.withValues(alpha: 0.15),
                   ),
                   child: const Icon(Icons.delete_outline, color: Colors.red),
                 ),

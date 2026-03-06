@@ -1306,19 +1306,34 @@ class _AddListingScreenState extends State<AddListingScreen> {
 
           const SizedBox(height: 12),
 
-          YandexAddressField(
-            controller: _city,
-            label: 'Город / адрес (Яндекс)',
-            onSelected: (_) => setState(() => _pickedLatLng = null),
-          ),
-          const SizedBox(height: 8),
-          Align(
-            alignment: Alignment.centerRight,
-            child: OutlinedButton.icon(
-              onPressed: _openMap,
-              icon: const Icon(Icons.map_outlined),
-              label: const Text('Выбрать на карте'),
-            ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: YandexAddressField(
+                  controller: _city,
+                  label: 'Город / адрес (Яндекс)',
+                  onSelected: (_) => setState(() => _pickedLatLng = null),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Tooltip(
+                message: 'Выбрать на карте',
+                child: Material(
+                  color: const Color(0xFF2E7D32),
+                  borderRadius: BorderRadius.circular(12),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(12),
+                    onTap: _openMap,
+                    child: const SizedBox(
+                      width: 48,
+                      height: 48,
+                      child: Icon(Icons.map_outlined, color: Colors.white),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
 
           // ✅ БЛОК “ПАРАМЕТРЫ АВТО”

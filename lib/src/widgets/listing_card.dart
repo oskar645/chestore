@@ -63,15 +63,17 @@ class ListingCard extends StatelessWidget {
     final cityRaw = listing.city.trim();
     final cityShort = cityRaw.isEmpty ? '' : _shortCity(cityRaw);
 
-    return InkWell(
-      onTap: onOpen,
+    return ClipRRect(
       borderRadius: BorderRadius.circular(12),
-      child: Ink(
-        decoration: BoxDecoration(
+      child: Material(
+        color: Theme.of(context).colorScheme.surface,
+        shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+          side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
         ),
-        child: Column(
+        child: InkWell(
+          onTap: onOpen,
+          child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             /// PHOTO
@@ -222,6 +224,7 @@ class ListingCard extends StatelessWidget {
               ),
             ),
           ],
+          ),
         ),
       ),
     );

@@ -1,8 +1,10 @@
+import 'package:chestore2/src/features/notifications/notifications_screen.dart';
+import 'package:chestore2/src/features/profile/about_app_screen.dart';
 import 'package:chestore2/src/features/profile/change_password_screen.dart';
 import 'package:chestore2/src/features/support/support_screen.dart';
-import 'package:chestore2/src/features/notifications/notifications_screen.dart';
 import 'package:chestore2/src/services/auth_service.dart';
 import 'package:chestore2/src/services/profile_service.dart';
+import 'package:chestore2/src/utils/app_snackbar.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -19,29 +21,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _saving = false;
 
   @override
-  void dispose() {
-    _nameCtrl.dispose();
-    _phoneCtrl.dispose();
-    super.dispose();
-  }
-
-  @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final auth = context.read<AuthService>();
       final profile = context.read<ProfileService>();
       final uid = auth.currentUser!.uid;
-
       final data = await profile.getProfile(uid);
 
       _nameCtrl.text =
           (data['display_name'] ?? data['displayName'] ?? data['name'] ?? '')
               .toString();
       _phoneCtrl.text = (data['phone'] ?? '').toString();
-
       if (mounted) setState(() {});
     });
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _phoneCtrl.dispose();
+    super.dispose();
   }
 
   Future<void> _save() async {
@@ -53,23 +53,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final phone = _phoneCtrl.text.trim();
 
     setState(() => _saving = true);
-
     try {
       await profile.updateProfile(uid, {
         'display_name': name,
         'name': name,
         'phone': phone,
       });
-
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Сохранено')),
-      );
+      showAppSnack(context, 'Сохранено');
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Ошибка: $e')),
-      );
+      showAppSnack(context, 'Ошибка: $e', isError: true);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -106,9 +100,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   void _notReady() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Сделаем позже 🙂')),
-    );
+    showAppSnack(context, 'Сделаем позже');
   }
 
   @override
@@ -125,7 +117,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: ListView(
         children: [
           _sectionTitle('Профиль'),
-
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Column(
@@ -149,9 +140,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ],
             ),
           ),
-
           const SizedBox(height: 12),
-
           Padding(
             padding: const EdgeInsets.all(16),
             child: FilledButton(
@@ -159,16 +148,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: Text(_saving ? 'Сохраняем...' : 'Сохранить изменения'),
             ),
           ),
-
           _sectionTitle('Аккаунт'),
-
           _tile(
             icon: Icons.mail_outline,
             title: 'Почта',
             subtitle: email.isEmpty ? 'Не указано' : email,
             onTap: _notReady,
           ),
-
           _tile(
             icon: Icons.lock_outline,
             title: 'Сменить пароль',
@@ -181,10 +167,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               );
             },
           ),
-
           _sectionTitle('Приложение'),
-
-          // УВЕДОМЛЕНИЯ – теперь открывается экран уведомлений
           _tile(
             icon: Icons.notifications_none,
             title: 'Уведомления',
@@ -197,7 +180,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
               );
             },
           ),
-
           _tile(
             icon: Icons.help_outline,
             title: 'Поддержка',
@@ -210,12 +192,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
               );
             },
           ),
-
           _tile(
             icon: Icons.info_outline,
             title: 'О приложении',
-            subtitle: 'Версия, правила',
-            onTap: _notReady,
+            subtitle: 'Версия и правила',
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const AboutAppScreen(),
+                ),
+              );
+            },
           ),
         ],
       ),

@@ -1,6 +1,8 @@
 import 'package:chestore2/src/features/listings/listing_detail_screen.dart';
-import 'package:chestore2/src/services/reports_service.dart';
+import 'package:chestore2/src/features/profile/seller_public_profile_screen.dart';
 import 'package:chestore2/src/services/auth_service.dart';
+import 'package:chestore2/src/services/reports_service.dart';
+import 'package:chestore2/src/utils/app_snackbar.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:timeago/timeago.dart' as timeago;
@@ -8,43 +10,60 @@ import 'package:timeago/timeago.dart' as timeago;
 class AdminReportsScreen extends StatelessWidget {
   const AdminReportsScreen({super.key});
 
+  static const List<_DecisionTemplate> _noViolationTemplates = [
+    _DecisionTemplate(
+      label: 'Нарушений не найдено',
+      title: 'Проверка жалобы завершена',
+      body: 'Мы проверили объявление. Нарушений правил не обнаружено.',
+    ),
+  ];
+
+  static const List<_DecisionTemplate> _warnTemplates = [
+    _DecisionTemplate(
+      label: 'Неполная информация',
+      title: '⚠️ Предупреждение по объявлению',
+      body:
+          'По вашему объявлению вынесено предупреждение: добавьте корректные данные и исправьте описание.',
+    ),
+    _DecisionTemplate(
+      label: 'Подозрительный контент',
+      title: '⚠️ Предупреждение по объявлению',
+      body:
+          'По вашему объявлению вынесено предупреждение: обнаружены признаки нарушения правил размещения.',
+    ),
+    _DecisionTemplate(
+      label: 'Неподходящая категория',
+      title: '⚠️ Предупреждение по объявлению',
+      body:
+          'По вашему объявлению вынесено предупреждение: выбрана неверная категория. Исправьте, пожалуйста.',
+    ),
+  ];
+
+  static const List<_DecisionTemplate> _removeTemplates = [
+    _DecisionTemplate(
+      label: 'Запрещенный товар',
+      title: '🚫 Объявление удалено',
+      body: 'Ваше объявление удалено: размещение такого товара запрещено правилами.',
+    ),
+    _DecisionTemplate(
+      label: 'Мошенничество/фейк',
+      title: '🚫 Объявление удалено',
+      body:
+          'Ваше объявление удалено: выявлены признаки мошенничества или недостоверной информации.',
+    ),
+    _DecisionTemplate(
+      label: 'Спам/дубликат',
+      title: '🚫 Объявление удалено',
+      body: 'Ваше объявление удалено: обнаружен спам или дублирование.',
+    ),
+  ];
+
   @override
   Widget build(BuildContext context) {
     timeago.setLocaleMessages('ru', timeago.RuMessages());
 
     final reports = context.read<ReportsService>();
     final me = context.read<AuthService>().currentUser!;
-
-    Future<String?> askAdminComment(BuildContext ctx, String title) async {
-      final c = TextEditingController();
-      final res = await showDialog<String?>(
-        context: ctx,
-        builder: (dctx) => AlertDialog(
-          title: Text(title),
-          content: TextField(
-            controller: c,
-            decoration: const InputDecoration(
-              hintText: 'Комментарий (необязательно)',
-              border: OutlineInputBorder(),
-            ),
-            minLines: 2,
-            maxLines: 4,
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dctx, null),
-              child: const Text('Отмена'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(dctx, c.text.trim()),
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      );
-      final t = (res ?? '').trim();
-      return t.isEmpty ? null : t;
-    }
 
     return Scaffold(
       appBar: AppBar(title: const Text('Жалобы')),
@@ -60,7 +79,7 @@ class AdminReportsScreen extends StatelessWidget {
 
           final docs = snap.data ?? [];
           if (docs.isEmpty) {
-            return const Center(child: Text('Жалоб пока нет'));
+            return const Center(child: Text('Открытых жалоб пока нет'));
           }
 
           return ListView.separated(
@@ -84,14 +103,16 @@ class AdminReportsScreen extends StatelessWidget {
               Future<void> doDecision({
                 required String decision,
                 required bool deleteListing,
-                required String notifyText,
+                required List<_DecisionTemplate> templates,
               }) async {
-                try {
-                  final adminComment = await askAdminComment(
-                    context,
-                    'Комментарий админа (по желанию)',
-                  );
+                final options = await _askDecisionOptions(
+                  context,
+                  templates: templates,
+                  title: deleteListing ? 'Удаление объявления' : 'Решение по жалобе',
+                );
+                if (options == null) return;
 
+                try {
                   if (deleteListing && listingId.isNotEmpty) {
                     await reports.deleteListingById(listingId);
                   }
@@ -100,44 +121,50 @@ class AdminReportsScreen extends StatelessWidget {
                     reportId: reportId,
                     adminUid: me.uid,
                     decision: decision,
-                    adminComment: adminComment,
+                    adminComment: options.adminComment,
                   );
 
                   String? notifyError;
-                  if (ownerUid.isNotEmpty) {
+                  if (options.sendNotification && ownerUid.isNotEmpty) {
+                    final messageBody = options.adminComment == null
+                        ? options.template.body
+                        : '${options.template.body}\n\nКомментарий администратора: ${options.adminComment}';
+
                     try {
-                      await reports.notifyOwnerViaSupport(
+                      await reports.notifyOwnerPersonal(
                         ownerUid: ownerUid,
-                        ownerName: 'Пользователь',
-                        messageFromAdmin: notifyText +
-                            (adminComment == null
-                                ? ''
-                                : '\n\nКомментарий: $adminComment'),
+                        title: options.template.title,
+                        body: messageBody,
                       );
                     } catch (e) {
                       notifyError = e.toString();
+                      try {
+                        await reports.notifyOwnerViaSupport(
+                          ownerUid: ownerUid,
+                          ownerName: 'Пользователь',
+                          messageFromAdmin:
+                              '${options.template.title}\n$messageBody',
+                        );
+                        notifyError = null;
+                      } catch (e2) {
+                        notifyError = e2.toString();
+                      }
                     }
                   }
 
                   if (!context.mounted) return;
                   if (notifyError == null) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Готово')),
-                    );
+                    showAppSnack(context, 'Жалоба обработана');
                   } else {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          'Жалоба закрыта, но не удалось отправить сообщение: $notifyError',
-                        ),
-                      ),
+                    showAppSnack(
+                      context,
+                      'Жалоба обработана, но уведомление не отправлено: $notifyError',
+                      isError: true,
                     );
                   }
                 } catch (e) {
                   if (!context.mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Ошибка: $e')),
-                  );
+                  showAppSnack(context, 'Ошибка: $e', isError: true);
                 }
               }
 
@@ -153,7 +180,7 @@ class AdminReportsScreen extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      reason,
+                      reason.isEmpty ? 'Жалоба без причины' : reason,
                       style: const TextStyle(
                         fontWeight: FontWeight.w900,
                         fontSize: 16,
@@ -166,9 +193,9 @@ class AdminReportsScreen extends StatelessWidget {
                           : 'Время: ${timeago.format(createdAt, locale: 'ru')}',
                     ),
                     const SizedBox(height: 8),
-                    Text('Объявление: $listingId'),
-                    Text('Владелец: $ownerUid'),
-                    Text('Кто пожаловался: $reporterId'),
+                    Text('Объявление: ${listingId.isEmpty ? 'не указано' : listingId}'),
+                    Text('Владелец: ${ownerUid.isEmpty ? 'не указан' : ownerUid}'),
+                    Text('Кто пожаловался: ${reporterId.isEmpty ? 'не указан' : reporterId}'),
                     if (comment.trim().isNotEmpty) ...[
                       const SizedBox(height: 8),
                       Text('Комментарий: $comment'),
@@ -192,12 +219,25 @@ class AdminReportsScreen extends StatelessWidget {
                                 },
                           child: const Text('Открыть объявление'),
                         ),
+                        OutlinedButton(
+                          onPressed: ownerUid.isEmpty
+                              ? null
+                              : () {
+                                  Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (_) => SellerPublicProfileScreen(
+                                        sellerId: ownerUid,
+                                      ),
+                                    ),
+                                  );
+                                },
+                          child: const Text('Открыть профиль'),
+                        ),
                         FilledButton.tonal(
                           onPressed: () => doDecision(
                             decision: 'no_violation',
                             deleteListing: false,
-                            notifyText:
-                                'Мы проверили объявление. Нарушений не обнаружено.',
+                            templates: _noViolationTemplates,
                           ),
                           child: const Text('Нарушений нет'),
                         ),
@@ -205,8 +245,7 @@ class AdminReportsScreen extends StatelessWidget {
                           onPressed: () => doDecision(
                             decision: 'warned',
                             deleteListing: false,
-                            notifyText:
-                                'По объявлению вынесено предупреждение. Исправьте, пожалуйста, нарушения.',
+                            templates: _warnTemplates,
                           ),
                           child: const Text('Предупредить'),
                         ),
@@ -216,10 +255,9 @@ class AdminReportsScreen extends StatelessWidget {
                               : () => doDecision(
                                     decision: 'removed',
                                     deleteListing: true,
-                                    notifyText:
-                                        'Объявление удалено из-за нарушения правил.',
+                                    templates: _removeTemplates,
                                   ),
-                          child: const Text('Удалить'),
+                          child: const Text('Удалить объявление'),
                         ),
                       ],
                     ),
@@ -232,4 +270,118 @@ class AdminReportsScreen extends StatelessWidget {
       ),
     );
   }
+
+  Future<_DecisionOptions?> _askDecisionOptions(
+    BuildContext context, {
+    required String title,
+    required List<_DecisionTemplate> templates,
+  }) async {
+    final commentCtrl = TextEditingController();
+    var selected = 0;
+    var sendNotification = true;
+
+    final result = await showDialog<_DecisionOptions>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setState) {
+            return AlertDialog(
+              title: Text(title),
+              content: SizedBox(
+                width: 420,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Выберите причину/шаблон уведомления:'),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          for (int i = 0; i < templates.length; i++)
+                            ChoiceChip(
+                              label: Text(templates[i].label),
+                              selected: selected == i,
+                              onSelected: (_) => setState(() => selected = i),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      CheckboxListTile(
+                        value: sendNotification,
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('Отправить уведомление пользователю'),
+                        onChanged: (v) {
+                          setState(() => sendNotification = v ?? true);
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: commentCtrl,
+                        minLines: 2,
+                        maxLines: 4,
+                        decoration: const InputDecoration(
+                          hintText: 'Комментарий администратора (необязательно)',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Отмена'),
+                ),
+                FilledButton(
+                  onPressed: () {
+                    final c = commentCtrl.text.trim();
+                    Navigator.pop(
+                      ctx,
+                      _DecisionOptions(
+                        template: templates[selected],
+                        sendNotification: sendNotification,
+                        adminComment: c.isEmpty ? null : c,
+                      ),
+                    );
+                  },
+                  child: const Text('Применить'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    commentCtrl.dispose();
+    return result;
+  }
+}
+
+class _DecisionTemplate {
+  final String label;
+  final String title;
+  final String body;
+
+  const _DecisionTemplate({
+    required this.label,
+    required this.title,
+    required this.body,
+  });
+}
+
+class _DecisionOptions {
+  final _DecisionTemplate template;
+  final bool sendNotification;
+  final String? adminComment;
+
+  const _DecisionOptions({
+    required this.template,
+    required this.sendNotification,
+    required this.adminComment,
+  });
 }

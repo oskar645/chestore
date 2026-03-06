@@ -278,30 +278,11 @@ onChanged: (v) => context.read<ThemeService>().toggle(v),
 ),
 const SizedBox(height: 10),
 
-FutureBuilder<bool>(
-future: admin.isAdminOnce(user.uid),
-builder: (context, adminSnap) {
-if (adminSnap.connectionState == ConnectionState.waiting) {
-return Column(
-children: [
-ListTile(
-shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-tileColor: Theme.of(context).colorScheme.surfaceContainerHighest,
-leading: const Icon(Icons.admin_panel_settings_outlined),
-title: const Text('Админ-панель'),
-subtitle: const Text('Проверяем доступ...'),
-trailing: const SizedBox(
-width: 18,
-height: 18,
-child: CircularProgressIndicator(strokeWidth: 2),
-),
-),
-const SizedBox(height: 10),
-],
-);
-}
-
-if (adminSnap.data != true) return const SizedBox.shrink();
+	StreamBuilder<bool>(
+	stream: admin.streamIsAdmin(user.uid),
+	initialData: false,
+	builder: (context, adminSnap) {
+	if (adminSnap.data != true) return const SizedBox.shrink();
 
 return Column(
 children: [

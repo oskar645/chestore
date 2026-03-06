@@ -5,7 +5,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:chestore2/src/features/admin/admin_reports_screen.dart';
 import 'admin_support_screen.dart';
 import 'package:chestore2/src/services/admin_service.dart';
+import 'package:chestore2/src/services/auth_service.dart';
 import 'package:chestore2/src/services/notifications_service.dart';
+import 'package:chestore2/src/utils/app_snackbar.dart';
 
 class AdminScreen extends StatefulWidget {
   const AdminScreen({super.key});
@@ -58,44 +60,69 @@ class _AdminScreenState extends State<AdminScreen>
   @override
   Widget build(BuildContext context) {
     final admin = context.read<AdminService>();
+    final me = context.read<AuthService>().currentUser;
+    final uid = me?.uid ?? '';
+    if (uid.isEmpty) {
+      return const Scaffold(body: Center(child: Text('Нужно войти')));
+    }
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Админ-Панель'),
-        bottom: TabBar(
-          controller: _tab,
-          isScrollable: true,
-          tabs: [
-            _tabWithAlert('Дашборд', false),
-            StreamBuilder<int>(
-              stream: admin.streamPendingModerationCount(),
-              builder: (context, snap) =>
-                  _tabWithAlert('Модерация', (snap.data ?? 0) > 0),
+    return StreamBuilder<bool>(
+      stream: admin.streamIsAdmin(uid),
+      initialData: false,
+      builder: (context, adminSnap) {
+        if (adminSnap.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+        if (adminSnap.data != true) {
+          return Scaffold(
+            appBar: AppBar(title: const Text('Админ-Панель')),
+            body: const Center(
+              child: Text('Доступ запрещен: только для администраторов'),
             ),
-            StreamBuilder<int>(
-              stream: admin.streamUnreadSupportForAdminCount(),
-              builder: (context, snap) =>
-                  _tabWithAlert('Поддержка', (snap.data ?? 0) > 0),
+          );
+        }
+
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('Админ-Панель'),
+            bottom: TabBar(
+              controller: _tab,
+              isScrollable: true,
+              tabs: [
+                _tabWithAlert('Дашборд', false),
+                StreamBuilder<int>(
+                  stream: admin.streamPendingModerationCount(),
+                  builder: (context, snap) =>
+                      _tabWithAlert('Модерация', (snap.data ?? 0) > 0),
+                ),
+                StreamBuilder<int>(
+                  stream: admin.streamUnreadSupportForAdminCount(),
+                  builder: (context, snap) =>
+                      _tabWithAlert('Поддержка', (snap.data ?? 0) > 0),
+                ),
+                StreamBuilder<int>(
+                  stream: admin.streamOpenReportsCount(),
+                  builder: (context, snap) =>
+                      _tabWithAlert('Жалобы', (snap.data ?? 0) > 0),
+                ),
+                _tabWithAlert('Уведомления', false),
+              ],
             ),
-            StreamBuilder<int>(
-              stream: admin.streamOpenReportsCount(),
-              builder: (context, snap) =>
-                  _tabWithAlert('Жалобы', (snap.data ?? 0) > 0),
-            ),
-            _tabWithAlert('Уведомления', false),
-          ],
-        ),
-      ),
-      body: TabBarView(
-        controller: _tab,
-        children: const [
-          _DashboardTab(),
-          _ModerationTab(),
-          AdminSupportTab(),
-          AdminReportsScreen(),
-          AdminNotificationsTab(),
-        ],
-      ),
+          ),
+          body: TabBarView(
+            controller: _tab,
+            children: const [
+              _DashboardTab(),
+              _ModerationTab(),
+              AdminSupportTab(),
+              AdminReportsScreen(),
+              AdminNotificationsTab(),
+            ],
+          ),
+        );
+      },
     );
   }
 }
@@ -434,6 +461,28 @@ class AdminListingReviewScreen extends StatefulWidget {
 
 class _AdminListingReviewScreenState extends State<AdminListingReviewScreen> {
   bool _busy = false;
+  static const List<_ModerationDeleteReason> _deleteReasons = [
+    _ModerationDeleteReason(
+      label: 'Запрещенный товар',
+      message:
+          'Ваше объявление удалено модератором: товар не разрешен правилами CheStore.',
+    ),
+    _ModerationDeleteReason(
+      label: 'Спам/дубликат',
+      message:
+          'Ваше объявление удалено модератором: обнаружен спам или дублирование.',
+    ),
+    _ModerationDeleteReason(
+      label: 'Недостоверная информация',
+      message:
+          'Ваше объявление удалено модератором: обнаружена недостоверная информация.',
+    ),
+    _ModerationDeleteReason(
+      label: 'Нарушение правил контента',
+      message:
+          'Ваше объявление удалено модератором: обнаружено нарушение правил публикации.',
+    ),
+  ];
 
   Future<void> _approve() async {
     setState(() => _busy = true);
@@ -504,24 +553,9 @@ class _AdminListingReviewScreenState extends State<AdminListingReviewScreen> {
   }
 
   Future<void> _delete() async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Удалить объявление?'),
-        content: const Text('Это действие нельзя отменить.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Нет'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Да'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true) return;
+    final notifications = context.read<NotificationsService>();
+    final selected = await _askDeleteReason();
+    if (selected == null) return;
 
     setState(() => _busy = true);
     try {
@@ -529,12 +563,110 @@ class _AdminListingReviewScreenState extends State<AdminListingReviewScreen> {
           .from('listings')
           .delete()
           .eq('id', widget.listingId);
-      if (mounted) Navigator.pop(context);
+
+      String? notifyError;
+      final ownerId = (widget.listingData['owner_id'] ?? '').toString();
+      if (ownerId.trim().isNotEmpty) {
+        try {
+          final body = selected.comment == null
+              ? selected.reason.message
+              : '${selected.reason.message}\n\nКомментарий модератора: ${selected.comment}';
+          await notifications.sendPersonal(
+                userId: ownerId,
+                title: '🚫 Объявление удалено',
+                body: body,
+              );
+        } catch (e) {
+          notifyError = e.toString();
+        }
+      }
+
+      if (!mounted) return;
+      if (notifyError == null) {
+        showAppSnack(context, 'Объявление удалено, уведомление отправлено');
+      } else {
+        showAppSnack(
+          context,
+          'Объявление удалено, но уведомление не отправлено: $notifyError',
+          isError: true,
+        );
+      }
+      Navigator.pop(context);
     } catch (e) {
-      debugPrint('Ошибка удаления: $e');
+      if (!mounted) return;
+      showAppSnack(context, 'Ошибка удаления: $e', isError: true);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  Future<_DeleteDecision?> _askDeleteReason() async {
+    var selected = 0;
+    final commentCtrl = TextEditingController();
+    final res = await showDialog<_DeleteDecision>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          title: const Text('Удалить объявление'),
+          content: SizedBox(
+            width: 420,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Выберите причину:'),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (int i = 0; i < _deleteReasons.length; i++)
+                        ChoiceChip(
+                          label: Text(_deleteReasons[i].label),
+                          selected: selected == i,
+                          onSelected: (_) => setState(() => selected = i),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: commentCtrl,
+                    minLines: 2,
+                    maxLines: 4,
+                    decoration: const InputDecoration(
+                      hintText: 'Комментарий модератора (необязательно)',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Отмена'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final c = commentCtrl.text.trim();
+                Navigator.pop(
+                  ctx,
+                  _DeleteDecision(
+                    reason: _deleteReasons[selected],
+                    comment: c.isEmpty ? null : c,
+                  ),
+                );
+              },
+              child: const Text('Удалить и уведомить'),
+            ),
+          ],
+        ),
+      ),
+    );
+    commentCtrl.dispose();
+    return res;
   }
 
   @override
@@ -625,6 +757,24 @@ class _AdminListingReviewScreenState extends State<AdminListingReviewScreen> {
       ),
     );
   }
+}
+
+class _ModerationDeleteReason {
+  final String label;
+  final String message;
+  const _ModerationDeleteReason({
+    required this.label,
+    required this.message,
+  });
+}
+
+class _DeleteDecision {
+  final _ModerationDeleteReason reason;
+  final String? comment;
+  const _DeleteDecision({
+    required this.reason,
+    required this.comment,
+  });
 }
 
 // ----------------
@@ -772,9 +922,7 @@ class _AdminNotificationsTabState extends State<AdminNotificationsTab> {
     final title = _titleCtrl.text.trim();
     final body = _bodyCtrl.text.trim();
     if (title.isEmpty || body.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Заполните заголовок и текст')),
-      );
+      showAppSnack(context, 'Заполните заголовок и текст', isError: true);
       return;
     }
 
@@ -783,16 +931,12 @@ class _AdminNotificationsTabState extends State<AdminNotificationsTab> {
     try {
       await service.sendGlobal(title: title, body: body);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Общее уведомление отправлено')),
-      );
+      showAppSnack(context, 'Общее уведомление отправлено');
       _titleCtrl.clear();
       _bodyCtrl.clear();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Ошибка: $e')),
-      );
+      showAppSnack(context, 'Ошибка: $e', isError: true);
     } finally {
       if (mounted) setState(() => _sendingGlobal = false);
     }
@@ -803,9 +947,7 @@ class _AdminNotificationsTabState extends State<AdminNotificationsTab> {
     final title = _titleCtrl.text.trim();
     final body = _bodyCtrl.text.trim();
     if (userId.isEmpty || title.isEmpty || body.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Укажи user_id, заголовок и текст')),
-      );
+      showAppSnack(context, 'Укажи user_id, заголовок и текст', isError: true);
       return;
     }
 
@@ -818,17 +960,13 @@ class _AdminNotificationsTabState extends State<AdminNotificationsTab> {
         body: body,
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Личное уведомление отправлено')),
-      );
+      showAppSnack(context, 'Личное уведомление отправлено');
       _userIdCtrl.clear();
       _titleCtrl.clear();
       _bodyCtrl.clear();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Ошибка: $e')),
-      );
+      showAppSnack(context, 'Ошибка: $e', isError: true);
     } finally {
       if (mounted) setState(() => _sendingPersonal = false);
     }

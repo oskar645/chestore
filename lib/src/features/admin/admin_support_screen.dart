@@ -1,10 +1,21 @@
 // lib/src/features/admin/admin_support_screen.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:chestore2/src/features/profile/seller_public_profile_screen.dart';
 import 'package:chestore2/src/services/support_service.dart';
+import 'package:chestore2/src/utils/app_snackbar.dart';
 
 class AdminSupportTab extends StatelessWidget {
   const AdminSupportTab({super.key});
+
+  void _openUserProfile(BuildContext context, String uid) {
+    if (uid.trim().isEmpty) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => SellerPublicProfileScreen(sellerId: uid),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -58,7 +69,17 @@ class AdminSupportTab extends StatelessWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
-              trailing: const Icon(Icons.chevron_right),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    tooltip: 'Профиль пользователя',
+                    icon: const Icon(Icons.person_outline),
+                    onPressed: () => _openUserProfile(context, uid),
+                  ),
+                  const Icon(Icons.chevron_right),
+                ],
+              ),
               onTap: () {
                 Navigator.of(context).push(
                   MaterialPageRoute(
@@ -97,6 +118,15 @@ class AdminTicketScreen extends StatefulWidget {
 class _AdminTicketScreenState extends State<AdminTicketScreen> {
   final TextEditingController _text = TextEditingController();
   bool _sending = false;
+
+  void _openUserProfile() {
+    if (widget.userUid.trim().isEmpty) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => SellerPublicProfileScreen(sellerId: widget.userUid),
+      ),
+    );
+  }
 
   /// 4 быстрых кнопки: короткие названия + длинный текст (вставляем в поле)
   final List<Map<String, String>> _quickReplies = const [
@@ -163,9 +193,7 @@ class _AdminTicketScreenState extends State<AdminTicketScreen> {
       _text.clear();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Ошибка отправки: $e')),
-      );
+      showAppSnack(context, 'Ошибка отправки: $e', isError: true);
     } finally {
       if (mounted) setState(() => _sending = false);
     }
@@ -204,7 +232,26 @@ class _AdminTicketScreenState extends State<AdminTicketScreen> {
     final support = context.read<SupportService>();
 
     return Scaffold(
-      appBar: AppBar(title: Text(widget.titleName)),
+      appBar: AppBar(
+        title: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: _openUserProfile,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(
+                child: Text(
+                  widget.titleName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 6),
+              const Icon(Icons.open_in_new, size: 18),
+            ],
+          ),
+        ),
+      ),
       body: Column(
         children: [
           Expanded(

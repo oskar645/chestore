@@ -1,9 +1,11 @@
 ﻿import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
+import 'package:chestore2/src/services/notifications_service.dart';
 
 class ReportsService {
   final SupabaseClient _db = Supabase.instance.client;
   final Uuid _uuid = const Uuid();
+  final NotificationsService _notifications = NotificationsService();
 
   bool _isMissingColumnError(Object error) {
     if (error is PostgrestException) {
@@ -126,6 +128,18 @@ class ReportsService {
       'text': messageFromAdmin,
       'created_at': now,
     });
+  }
+
+  Future<void> notifyOwnerPersonal({
+    required String ownerUid,
+    required String title,
+    required String body,
+  }) async {
+    await _notifications.sendPersonal(
+      userId: ownerUid,
+      title: title,
+      body: body,
+    );
   }
 }
 

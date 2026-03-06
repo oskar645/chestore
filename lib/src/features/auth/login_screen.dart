@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -63,8 +64,11 @@ class _LoginScreenState extends State<LoginScreen> {
 
     setState(() => _loading = true);
     try {
-      await _sb.auth.resetPasswordForEmail(email);
-      _snack('Ссылка для сброса пароля отправлена на почту');
+      await _sb.auth.resetPasswordForEmail(
+        email,
+        redirectTo: kIsWeb ? null : 'io.supabase.flutter://reset-callback/',
+      );
+      _snack('Письмо для смены пароля отправлено на почту');
     } on AuthException catch (e) {
       _snack(_niceAuthError(e));
     } catch (e) {

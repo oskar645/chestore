@@ -48,14 +48,27 @@ class NotificationsService {
     return (rows as List).isNotEmpty;
   }
 
+  DateTime _parseCreatedAt(dynamic raw) {
+    if (raw is DateTime) return raw.toUtc();
+    if (raw is String) return DateTime.tryParse(raw)?.toUtc() ?? DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+    return DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+  }
+
+  List<Map<String, dynamic>> _sortNewestFirst(List<Map<String, dynamic>> rows) {
+    rows.sort((a, b) => _parseCreatedAt(b['created_at']).compareTo(_parseCreatedAt(a['created_at'])));
+    return rows;
+  }
+
   Stream<List<Map<String, dynamic>>> streamGlobal() {
     final stream = _db.from('user_notifications').stream(primaryKey: ['id']);
 
     return stream.map(
-      (rows) => rows
+      (rows) => _sortNewestFirst(
+        rows
           .where((r) => r['scope'] == 'global')
           .map((r) => Map<String, dynamic>.from(r))
           .toList(),
+      ),
     );
   }
 
@@ -63,12 +76,14 @@ class NotificationsService {
     final stream = _db.from('user_notifications').stream(primaryKey: ['id']);
 
     return stream.map(
-      (rows) => rows
+      (rows) => _sortNewestFirst(
+        rows
           .where(
             (r) => r['scope'] == 'personal' && r['user_id']?.toString() == userId,
           )
           .map((r) => Map<String, dynamic>.from(r))
           .toList(),
+      ),
     );
   }
 

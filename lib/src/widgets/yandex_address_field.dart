@@ -24,6 +24,7 @@ class _YandexAddressFieldState extends State<YandexAddressField> {
   Timer? _debounce;
   bool _loading = false;
   List<String> _items = [];
+  String _rawValue = '';
 
   @override
   void dispose() {
@@ -32,6 +33,7 @@ class _YandexAddressFieldState extends State<YandexAddressField> {
   }
 
   void _onChanged(String value) {
+    _rawValue = value;
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 400), () {
       _load(value);
@@ -78,6 +80,12 @@ class _YandexAddressFieldState extends State<YandexAddressField> {
     });
   }
 
+  bool _showManualChoice() {
+    final raw = _rawValue.trim();
+    if (raw.length < 2) return false;
+    return !_items.any((x) => x.trim().toLowerCase() == raw.toLowerCase());
+  }
+
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -111,29 +119,48 @@ class _YandexAddressFieldState extends State<YandexAddressField> {
           ),
           onChanged: _onChanged,
         ),
-        if (_items.isNotEmpty)
+        if (_items.isNotEmpty || _showManualChoice())
           Container(
             margin: const EdgeInsets.only(top: 4),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(8),
-              color: Theme.of(context).colorScheme.surfaceVariant,
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
             ),
             constraints: const BoxConstraints(maxHeight: 220),
             child: ListView.separated(
               shrinkWrap: true,
-              itemCount: _items.length,
+              itemCount: _items.length + (_showManualChoice() ? 1 : 0),
               separatorBuilder: (_, __) => const Divider(height: 1),
               itemBuilder: (_, i) {
-                final v = _items[i];
+                if (i < _items.length) {
+                  final v = _items[i];
+                  return ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.place_outlined),
+                    title: Text(
+                      v,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    onTap: () => _select(v),
+                  );
+                }
+
+                final typed = _rawValue.trim();
                 return ListTile(
                   dense: true,
-                  leading: const Icon(Icons.place_outlined),
-                  title: Text(
-                    v,
+                  leading: const Icon(Icons.edit_location_alt_outlined),
+                  title: const Text(
+                    'Оставить как введено',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  subtitle: Text(
+                    typed,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
-                  onTap: () => _select(v),
+                  onTap: () => _select(typed),
                 );
               },
             ),
